@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..utils.aes import cbc_decrypt, strip_pkcs7
+from ..utils.ffmpeg import discover as discover_ffmpeg
 from ..utils.hash import media_hash
 from ..utils.logging import get_logger
 from .hls import HlsMedia, HlsSegment, parse_playlist, pick_audio, pick_variant, segment_iv
@@ -160,9 +161,31 @@ def _decrypt_segment(
 
 
 def merge_with_ffmpeg(segment_paths: list[Path], output: Path, ffmpeg_path: str = "ffmpeg") -> None:
+    """把分片合并成 mp4 / m4a。
+
+    ffmpeg 未配置时自动在 PATH、Scoop / Chocolatey、imageio-ffmpeg、Playwright 等
+    常见位置查找；被裁剪过的构建（没有 concat 解复用器）自动改用二进制拼接 + 重封装。
+    """
     if not segment_paths:
         raise MediaDownloadError("没有可合并的分片", "media_download_error")
     output.parent.mkdir(parents=True, exist_ok=True)
+    info = discover_ffmpeg(ffmpeg_path)
+    exe = info.path or ffmpeg_path
+    if info.found and not info.has_concat:
+        logger.info("ffmpeg 缺少 concat 解复用器，改用二进制拼接：%s", exe)
+        merge_by_binary_concat(segment_paths, output, exe)
+        return
+    try:
+        _merge_with_list_file(segment_paths, output, exe)
+    except MediaDownloadError:
+        if not info.found:
+            raise
+        # 极少数构建不支持 concat 文件列表：退回二进制拼接再试一次
+        logger.warning("ffmpeg 列表合并失败，改用二进制拼接重试：%s", exe)
+        merge_by_binary_concat(segment_paths, output, exe)
+
+
+def _merge_with_list_file(segment_paths: list[Path], output: Path, ffmpeg_path: str) -> None:
     list_file = output.parent / f".{output.stem}_concat.txt"
     lines = []
     for path in segment_paths:
@@ -202,6 +225,53 @@ def merge_with_ffmpeg(segment_paths: list[Path], output: Path, ffmpeg_path: str 
         detail = (completed.stderr or "").strip().splitlines()
         reason = detail[-1] if detail else f"ffmpeg 返回码 {completed.returncode}"
         raise MediaDownloadError(f"ffmpeg 合并失败：{reason}", "media_download_error")
+
+
+def merge_by_binary_concat(segment_paths: list[Path], output: Path, ffmpeg_path: str = "ffmpeg") -> None:
+    """二进制拼接后用 ffmpeg 重封装（适配没有 concat 解复用器的裁剪版 ffmpeg）。
+
+    HLS 的 ts、DASH 的 fMP4 分片本身就是可拼接的字节流，拼起来再 ``-c copy``
+    重新封装即可，不重新编码。
+    """
+    joined = output.parent / f".{output.stem}_joined.bin"
+    try:
+        with joined.open("wb") as handle:
+            for path in segment_paths:
+                with path.open("rb") as source:
+                    shutil.copyfileobj(source, handle)
+        suffix = segment_paths[0].suffix.lower()
+        input_format = "mpegts" if suffix in (".ts", ".mts") else "mp4"
+        command = [
+            ffmpeg_path,
+            "-y",
+            "-f",
+            input_format,
+            "-i",
+            str(joined),
+            "-c",
+            "copy",
+            str(output),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=3600,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+        except FileNotFoundError as exc:
+            raise MediaDownloadError(
+                "未找到 ffmpeg，请安装并在设置中指定 ffmpeg 路径", "media_download_error"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise MediaDownloadError("ffmpeg 重封装超时", "media_download_error") from exc
+        if completed.returncode != 0 or not output.exists() or output.stat().st_size == 0:
+            detail = (completed.stderr or "").strip().splitlines()
+            reason = detail[-1] if detail else f"ffmpeg 返回码 {completed.returncode}"
+            raise MediaDownloadError(f"ffmpeg 重封装失败：{reason}", "media_download_error")
+    finally:
+        joined.unlink(missing_ok=True)
 
 
 def concat_files(paths: list[Path], output: Path) -> None:

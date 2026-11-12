@@ -470,9 +470,14 @@ def test_preview_counts_ytdlp_candidates(monkeypatch, task_config, fetcher):
     assert result.subpages[0].videos >= 1
 
 
-def test_build_params_maps_config(tmp_path):
+def test_build_params_maps_config(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     ffmpeg_dir = tmp_path / "ffmpeg"
     ffmpeg_dir.mkdir()
+    monkeypatch.setattr(
+        ytdlp_engine, "discover_ffmpeg", lambda configured=None: SimpleNamespace(path=r"C:\ff\ffmpeg.exe")
+    )
     cfg = YtdlpConfig(
         cookies_file=str(tmp_path / "cookies.txt"),
         cookies_from_browser="edge",
@@ -499,10 +504,56 @@ def test_build_params_maps_config(tmp_path):
     assert params["retries"] == 5
     assert params["noplaylist"] is False
     assert params["playlistend"] == 3
-    assert params["ffmpeg_location"] == str(ffmpeg_dir)
+    assert params["ffmpeg_location"] == r"C:\ff\ffmpeg.exe"
     assert params["paths"]["home"] == str(tmp_path)
     assert "%(ext)s" in params["outtmpl"]["default"]
     assert params["cachedir"] is False
 
     # 未指定 ffmpeg 时不传位置参数（交给 yt-dlp 自己在 PATH 里找）
     assert "ffmpeg_location" not in ytdlp_engine.build_params(YtdlpConfig(), ffmpeg_path="ffmpeg")
+
+
+def test_ytdlp_uses_discovered_ffmpeg(fake_ytdlp, monkeypatch, tmp_path):
+    """yt-dlp 的 ffmpeg_location 必须来自 utils.ffmpeg 的探测结果（含 imageio / 配置路径）。"""
+    from types import SimpleNamespace
+
+    calls: list[str | None] = []
+
+    def fake_discover(configured=None):
+        calls.append(configured)
+        return SimpleNamespace(path=r"C:\tools\ffmpeg.exe", found=True)
+
+    monkeypatch.setattr(ytdlp_engine, "discover_ffmpeg", fake_discover)
+    params = ytdlp_engine.build_params(
+        YtdlpConfig(), download=True, home=tmp_path, ffmpeg_path="ffmpeg"
+    )
+    assert params["ffmpeg_location"] == r"C:\tools\ffmpeg.exe"
+    # 发现阶段不探测 ffmpeg，避免额外开销
+    assert "ffmpeg_location" not in ytdlp_engine.build_params(YtdlpConfig(), download=False)
+    assert calls == ["ffmpeg"]
+
+    path, _ = ytdlp_engine.download(
+        PAGE, tmp_path / "watch.mp4", YtdlpConfig(), kind="video", ffmpeg_path="ffmpeg"
+    )
+    assert path.exists()
+    assert FakeYoutubeDL.calls[-1]["ffmpeg_location"] == r"C:\tools\ffmpeg.exe"
+
+
+def test_ytdlp_download_skips_ffmpeg_when_not_found(fake_ytdlp, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        ytdlp_engine, "discover_ffmpeg", lambda configured=None: SimpleNamespace(path=None, found=False)
+    )
+    params = ytdlp_engine.build_params(YtdlpConfig(), download=True, home=tmp_path)
+    assert "ffmpeg_location" not in params
+
+
+def test_doctor_reports_ffmpeg(tmp_path, monkeypatch, capsys):
+    from focus_crawler.__main__ import main
+
+    code = main(["doctor"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) >= {"python", "ytdlp", "ffmpeg", "playwright"}
+    assert set(payload["ffmpeg"]) >= {"found", "path", "source", "version", "can_merge_mp4"}

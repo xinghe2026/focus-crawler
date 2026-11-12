@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import platform
-import shutil
 import sys
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from .core.scheduler import Scheduler
 from .core.subpage_collector import SubpageCollector
 from .core.storage import Storage
 from .core.ytdlp_engine import probe as ytdlp_probe
+from .utils.ffmpeg import describe as describe_ffmpeg
 from .utils.logging import setup_logging
 from .utils.paths import app_home
 
@@ -110,7 +110,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "python": platform.python_version(),
         "platform": platform.platform(),
         "ytdlp": ytdlp_probe().as_dict(),
-        "ffmpeg": shutil.which(args.ffmpeg or "ffmpeg") or "",
+        # 与运行期一致：配置 → PATH → Scoop/Chocolatey → imageio-ffmpeg → Playwright
+        "ffmpeg": describe_ffmpeg(args.ffmpeg),
         "playwright": playwright_available(),
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))

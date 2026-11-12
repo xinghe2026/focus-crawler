@@ -44,6 +44,8 @@
 | yt-dlp 下载：按页面地址重新解析（签名保鲜）、自动合流 / 转码、Cookies（文件 / 浏览器）、代理、超时重试、暂停与停止 | 完成 |
 | 媒体来源落库（`media.source_kind`）与 Excel 导出列，区分静态嗅探 / 平台适配器 / yt-dlp | 完成 |
 | 命令行环境自检：`focus-crawler doctor` 检查 yt-dlp / ffmpeg / playwright | 完成 |
+| ffmpeg 自动探测：配置路径 → `%APPDATA%/FocusCrawler/tools` → PATH → Scoop / Chocolatey → imageio-ffmpeg → Playwright，探测 concat / mp4 能力，裁剪版自动改走二进制拼接 + 重封装 | 完成 |
+| 设置页显示 ffmpeg / yt-dlp 实际状态，支持「自动检测」一键填入 | 完成 |
 | PyInstaller `--onedir` 打包：`scripts/build.ps1`、GUI 入口、测试与 exe 冒烟自检 | 完成 |
 
 ## 安装
@@ -59,7 +61,16 @@ python -m pip install -e ".[dynamic]"
 playwright install chromium
 ```
 
-yt-dlp 与 Playwright 都是可选依赖：未安装时对应能力自动降级（记录一条警告，不影响其它抓取）。
+```powershell
+# 可选：内置一个完整 ffmpeg（无需另外安装，合流 / 合并开箱可用）
+python -m pip install imageio-ffmpeg
+```
+
+yt-dlp、Playwright、imageio-ffmpeg 都是可选依赖：未安装时对应能力自动降级（记录一条警告，不影响其它抓取）。
+
+ffmpeg 查找顺序（任选其一即可）：设置里的路径 → `%APPDATA%/FocusCrawler/tools/ffmpeg.exe` → PATH →
+Scoop / Chocolatey / `C:\ffmpeg` → imageio-ffmpeg 包 → Playwright 内置。找错的构建会被自动跳过：
+没有 concat 解复用器时改走「二进制拼接 + `-c copy` 重封装」。
 
 ## 使用（图形界面）
 
@@ -149,7 +160,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 1. **发现**：平台适配器（B 站等）优先；没有结果时按 `mode` 调用 yt-dlp 解析，
    把每个条目折算成一条媒体记录，`format_id`、标题、清晰度、时长、码率一并入库。
 2. **下载**：`source_kind = ytdlp` 的记录在下载前会用**页面地址**重新解析一次，
-   由 yt-dlp 完成签名刷新、分片下载、音视频合流（需要 ffmpeg）与可选转码；
+   由 yt-dlp 完成签名刷新、分片下载、音视频合流（用同一套 ffmpeg 探测结果，装好即用）与可选转码；
    yt-dlp 失败时自动回退到记录里的直链地址。
 3. **降级**：未安装 yt-dlp、页面不是媒体页、站点需要登录等情况只记一条警告，
    不写入失败表，也不阻塞其它子页。
@@ -171,7 +182,8 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 - 不提供商业音乐平台的解密、签名逆向或会员内容绕过；仅下载页面本身可访问的原始文件。
 - 动态媒体嗅探逐子页串行执行（并发 1）；未安装 playwright 时自动回退静态抓取。
 - yt-dlp 解析每个子页最多额外一次请求；`auto` 模式只在站点被 yt-dlp 支持时才触发。
-- yt-dlp 需要合流音视频时依赖 ffmpeg（未安装时只能拿到单一格式）；DRM 内容仍不支持。
+- yt-dlp 合流音视频时依赖 ffmpeg；程序会自动探测（含打包内置的 imageio-ffmpeg），都找不到时只能拿单一格式。
+- 打包产物约 330MB（含 Playwright 与 imageio-ffmpeg）；不装这两个可选依赖可显著减小体积。
 
 ## 假设（信息不足时的默认决策）
 

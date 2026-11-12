@@ -25,7 +25,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core import ytdlp_engine
 from ..core.preview import PreviewResult
+from ..utils.ffmpeg import describe as describe_ffmpeg
 from . import settings
 
 
@@ -237,7 +239,22 @@ class SettingsDialog(QDialog):
         self.delay_min.setValue(int(values["default_delay_min"]))
         self.delay_max.setValue(int(values["default_delay_max"]))
         self.robots.setChecked(bool(values["default_respect_robots"]))
-        engine_form.addRow("ffmpeg 路径", self.ffmpeg_edit)
+        ffmpeg_row = QHBoxLayout()
+        ffmpeg_row.addWidget(self.ffmpeg_edit)
+        detect_button = QPushButton("自动检测")
+        detect_button.clicked.connect(self._on_detect_ffmpeg)
+        ffmpeg_row.addWidget(detect_button)
+        browse_ffmpeg = QPushButton("选择")
+        browse_ffmpeg.clicked.connect(self._browse_ffmpeg)
+        ffmpeg_row.addWidget(browse_ffmpeg)
+        self.ffmpeg_status = QLabel("")
+        self.ffmpeg_status.setWordWrap(True)
+        internal = ytdlp_engine.describe()
+        self.ytdlp_status = QLabel(internal if ytdlp_engine.is_available() else f"{internal}（可选：pip install -e \".[ytdlp]\"）")
+        self.ytdlp_status.setWordWrap(True)
+        engine_form.addRow("ffmpeg 路径", ffmpeg_row)
+        engine_form.addRow("ffmpeg 状态", self.ffmpeg_status)
+        engine_form.addRow("yt-dlp 状态", self.ytdlp_status)
         engine_form.addRow("默认并发", self.concurrency)
         engine_form.addRow("默认延迟下限(ms)", self.delay_min)
         engine_form.addRow("默认延迟上限(ms)", self.delay_max)
@@ -245,6 +262,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(engine_group)
         layout.addStretch(1)
 
+        self._refresh_ffmpeg_status()
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Save).setText("保存")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
@@ -256,6 +274,36 @@ class SettingsDialog(QDialog):
         directory = QFileDialog.getExistingDirectory(self, "选择数据目录", self.data_dir_edit.text())
         if directory:
             self.data_dir_edit.setText(directory)
+
+    def _refresh_ffmpeg_status(self) -> None:
+        """展示实际会使用的 ffmpeg（PATH / 编辑器内置 / imageio-ffmpeg 等）。"""
+        info = describe_ffmpeg(self.ffmpeg_edit.text().strip() or None)
+        if info["found"]:
+            flags = "、".join(
+                name
+                for name, ok in (("concat", info["concat"]), ("mp4", info["mp4_mux"]), ("mpegts", info["mpegts_demux"]))
+                if ok
+            )
+            self.ffmpeg_status.setText(
+                f"已找到（{info['source']}）：{info['path']}\n版本 {info['version']}，能力：{flags or '未知'}"
+            )
+        else:
+            self.ffmpeg_status.setText(
+                "未找到 ffmpeg：HLS / DASH 合并与 yt-dlp 音视频合流会失败。\n"
+                "可点「自动检测」，或安装 imageio-ffmpeg / 在 PATH 放置 ffmpeg.exe。"
+            )
+
+    def _on_detect_ffmpeg(self) -> None:
+        info = describe_ffmpeg(self.ffmpeg_edit.text().strip() or None)
+        if info["found"]:
+            self.ffmpeg_edit.setText(info["path"])
+        self._refresh_ffmpeg_status()
+
+    def _browse_ffmpeg(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "选择 ffmpeg 可执行文件", self.ffmpeg_edit.text(), "可执行文件 (*.exe);;所有文件 (*)")
+        if path:
+            self.ffmpeg_edit.setText(path)
+            self._refresh_ffmpeg_status()
 
     def _browse_media_dir(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "选择媒体下载根目录", self.media_root_edit.text())

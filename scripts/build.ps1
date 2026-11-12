@@ -32,6 +32,12 @@ if ($LASTEXITCODE -eq 0) {
   Write-Host "检测到 playwright，打包动态嗅探依赖"
   $PyArgs += @("--collect-all", "playwright")
 }
+& $Python -c "import imageio_ffmpeg" 2>$null
+if ($LASTEXITCODE -eq 0) {
+  # imageio-ffmpeg 自带一个完整 ffmpeg，打包后无需用户另装（约 80MB）
+  Write-Host "检测到 imageio-ffmpeg，打包内置 ffmpeg"
+  $PyArgs += @("--collect-binaries", "imageio_ffmpeg")
+}
 & $Python -c "import yt_dlp" 2>$null
 if ($LASTEXITCODE -eq 0) {
   Write-Host "检测到 yt-dlp，打包通用解析依赖（体积约 30MB）"

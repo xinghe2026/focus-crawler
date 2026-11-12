@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..config.schema import YtdlpConfig
+from ..utils.ffmpeg import discover as discover_ffmpeg
 from ..utils.hash import media_hash
 from ..utils.logging import get_logger
 from .media_common import MediaCandidate, MediaDownloadError, sanitize_filename
@@ -160,17 +161,15 @@ def _classify(exc: BaseException) -> YtdlpError:
 
 
 def _ffmpeg_location(ffmpeg_path: str | None) -> str | None:
-    if not ffmpeg_path:
-        return None
-    candidate = Path(ffmpeg_path)
+    """复用 utils.ffmpeg 的探测结果：PATH / Scoop / imageio-ffmpeg / Playwright 都会被找到。
+
+    yt-dlp 的 ``ffmpeg_location`` 既接受可执行文件也接受目录，这里统一给出绝对路径。
+    """
     try:
-        if candidate.is_file():
-            return str(candidate)
-        if candidate.is_dir():
-            return str(candidate)
-    except OSError:
+        info = discover_ffmpeg(ffmpeg_path)
+    except Exception:  # noqa: BLE001 - 探测失败不影响下载（yt-dlp 会退回 PATH 查找）
         return None
-    return None
+    return info.path or None
 
 
 def build_params(
@@ -210,10 +209,10 @@ def build_params(
         params["cookiesfrombrowser"] = (cfg.cookies_from_browser,)
     if cfg.proxy:
         params["proxy"] = cfg.proxy
-    location = _ffmpeg_location(ffmpeg_path)
-    if location:
-        params["ffmpeg_location"] = location
     if download:
+        location = _ffmpeg_location(ffmpeg_path)
+        if location:
+            params["ffmpeg_location"] = location
         params["outtmpl"] = {"default": outtmpl or "%(title).120B [%(id)s].%(ext)s"}
         params["paths"] = {"home": str(home)} if home else {}
         params["overwrites"] = True
