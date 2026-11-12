@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
+import shutil
 import sys
 from pathlib import Path
 
@@ -12,9 +14,11 @@ from .config.schema import ConfigError, TaskConfig
 from .core.exporter import export_excel
 from .core.fetcher import Fetcher
 from .core.preview import preview_task
+from .core.dynamic_sniffer import playwright_available
 from .core.scheduler import Scheduler
 from .core.subpage_collector import SubpageCollector
 from .core.storage import Storage
+from .core.ytdlp_engine import probe as ytdlp_probe
 from .utils.logging import setup_logging
 from .utils.paths import app_home
 
@@ -100,6 +104,19 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """环境自检：yt-dlp / ffmpeg / playwright 等可选依赖是否就绪。"""
+    payload = {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "ytdlp": ytdlp_probe().as_dict(),
+        "ffmpeg": shutil.which(args.ffmpeg or "ffmpeg") or "",
+        "playwright": playwright_available(),
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="focus-crawler", description="FocusCrawler 配置驱动爬虫")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -122,6 +139,10 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--db", default=None)
     export.add_argument("--output", default=None, help="输出 xlsx 路径")
     export.set_defaults(func=cmd_export)
+
+    doctor = sub.add_parser("doctor", help="环境自检：yt-dlp / ffmpeg / playwright")
+    doctor.add_argument("--ffmpeg", default=None, help="自定义 ffmpeg 可执行文件路径")
+    doctor.set_defaults(func=cmd_doctor)
     return parser
 
 

@@ -53,6 +53,21 @@ def isolated_home(tmp_path, monkeypatch):
     return home
 
 
+@pytest.fixture(autouse=True)
+def block_real_ytdlp(request, monkeypatch):
+    """默认禁用真实 yt-dlp：单元测试必须离线且结果稳定。
+
+    需要真实 yt-dlp 的用例加 ``@pytest.mark.real_ytdlp``；
+    需要假 yt-dlp 的用例自行 monkeypatch ``ytdlp_engine._MODULE``。
+    """
+    if request.node.get_closest_marker("real_ytdlp"):
+        return
+    from focus_crawler.core import ytdlp_engine
+
+    monkeypatch.setattr(ytdlp_engine, "_MODULE", None)
+    monkeypatch.setattr(ytdlp_engine, "_IMPORT_ERROR", "测试环境禁用真实 yt-dlp")
+
+
 @pytest.fixture
 def fixture_client() -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(fixture_handler), follow_redirects=True)

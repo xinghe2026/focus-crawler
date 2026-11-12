@@ -18,6 +18,14 @@ _HEADER_FONT = Font(bold=True, color="FFFFFF")
 _HEADER_FILL = PatternFill("solid", fgColor="4F81BD")
 
 
+def _row_value(row: Any, column: str) -> Any:
+    """兼容老库：缺列时返回 None，避免导出因迁移前数据报错。"""
+    try:
+        return row[column]
+    except (IndexError, KeyError):
+        return None
+
+
 def _write_sheet(workbook: Workbook, title: str, headers: list[str], rows: list[list[Any]]) -> None:
     sheet = workbook.create_sheet(title)
     sheet.append(headers)
@@ -119,7 +127,17 @@ def export_excel(
         _write_sheet(
             workbook,
             "videos",
-            ["source_url", "parent_url", "media_url", "format", "quality", "file_size", "local_path", "status"],
+            [
+                "source_url",
+                "parent_url",
+                "media_url",
+                "format",
+                "quality",
+                "source_kind",
+                "file_size",
+                "local_path",
+                "status",
+            ],
             [
                 [
                     row["source_url"],
@@ -127,6 +145,7 @@ def export_excel(
                     row["media_url"],
                     row["format"],
                     row["quality"],
+                    _row_value(row, "source_kind"),
                     row["file_size"],
                     row["local_path"],
                     row["status"],
@@ -145,6 +164,7 @@ def export_excel(
                 "bitrate",
                 "duration",
                 "sample_rate",
+                "source_kind",
                 "file_size",
                 "local_path",
                 "status",
@@ -158,6 +178,7 @@ def export_excel(
                     row["bitrate"],
                     row["duration"],
                     row["sample_rate"],
+                    _row_value(row, "source_kind"),
                     row["file_size"],
                     row["local_path"],
                     row["status"],

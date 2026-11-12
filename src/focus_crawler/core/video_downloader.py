@@ -25,6 +25,8 @@ from .media_pipeline import (
     record_segment,
     wait_if_paused,
 )
+from .ytdlp_engine import YtdlpError, YtdlpUnavailable
+from .ytdlp_engine import download as ytdlp_download
 
 logger = get_logger("video_download")
 
@@ -48,12 +50,38 @@ def download_video(
     merge_fn: MergeFn | None = None,
     pause_interval: float = 0.15,
     headers: dict[str, str] | None = None,
+    source_kind: str | None = None,
+    page_url: str | None = None,
 ) -> tuple[Path, int]:
-    """按链接类型下载视频，返回 (本地路径, 字节数)。"""
+    """按链接类型下载视频，返回 (本地路径, 字节数)。
+
+    source_kind 为 ``ytdlp`` 时优先交给 yt-dlp 重新解析下载（签名新鲜、自动合流），
+    解析或下载失败再回退到记录中的直链地址。
+    """
     target = Path(target)
     merged_headers = dict(config.headers) if config and config.headers else {}
     if headers:
         merged_headers.update(headers)
+    ytdlp_cfg = config.adapter.ytdlp if config is not None else None
+    if source_kind == "ytdlp" and page_url and ytdlp_cfg is not None and ytdlp_cfg.enabled:
+        try:
+            return ytdlp_download(
+                page_url,
+                target,
+                ytdlp_cfg,
+                kind="video",
+                headers=merged_headers,
+                ffmpeg_path=ffmpeg_path or (config.ffmpeg_path if config else "ffmpeg"),
+                should_stop=should_stop,
+                should_pause=should_pause,
+                pause_interval=pause_interval,
+            )
+        except YtdlpUnavailable as exc:
+            logger.warning("yt-dlp 不可用，回退直链下载 %s：%s", url, exc)
+        except MediaDownloadError:
+            raise
+        except YtdlpError as exc:
+            logger.warning("yt-dlp 下载失败，回退直链下载 %s：%s", url, exc)
     fmt = guess_format(url)
     if fmt == "m3u8":
         return download_hls(

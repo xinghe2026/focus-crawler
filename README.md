@@ -40,6 +40,10 @@
 | 防盗链插件：自动/规则 Referer、域名与 URL 正则规则、全局/规则请求头、浏览器兼容头、自动 Origin，作用于图片、视频、音频的发现与下载 | 完成 |
 | 媒体主机回退：域名解析失败（如 `WinError 11001`）时按 `media_fallback.rules` 切换到同路径镜像主机下载，任务编辑器「媒体与导出」页可配置 | 完成 |
 | Playwright 子页动态嗅探（`render_for_media`）：逐子页加载、监听网络视频 / 音频、失败回退静态、受最大子页数限制 | 完成 |
+| yt-dlp 通用解析（`video/audio.adapter.ytdlp`）：1750+ 站点视频 / 音频候选，`off / auto / force` 三种模式，平台适配器优先、yt-dlp 补漏 | 完成 |
+| yt-dlp 下载：按页面地址重新解析（签名保鲜）、自动合流 / 转码、Cookies（文件 / 浏览器）、代理、超时重试、暂停与停止 | 完成 |
+| 媒体来源落库（`media.source_kind`）与 Excel 导出列，区分静态嗅探 / 平台适配器 / yt-dlp | 完成 |
+| 命令行环境自检：`focus-crawler doctor` 检查 yt-dlp / ffmpeg / playwright | 完成 |
 | PyInstaller `--onedir` 打包：`scripts/build.ps1`、GUI 入口、测试与 exe 冒烟自检 | 完成 |
 
 ## 安装
@@ -47,10 +51,15 @@
 ```powershell
 python -m pip install -e ".[dev,gui]"
 
+# 可选：yt-dlp 通用解析（任意站点视频 / 音频）
+python -m pip install -e ".[ytdlp]"
+
 # 可选：子页动态媒体嗅探（render_for_media）
 python -m pip install -e ".[dynamic]"
 playwright install chromium
 ```
+
+yt-dlp 与 Playwright 都是可选依赖：未安装时对应能力自动降级（记录一条警告，不影响其它抓取）。
 
 ## 使用（图形界面）
 
@@ -71,6 +80,9 @@ python -m focus_crawler preview adapters/example.com/config.json
 
 # 运行任务并导出 Excel
 python -m focus_crawler run adapters/example.com/config.json --db data/test.db --export out.xlsx
+
+# 环境自检：yt-dlp / ffmpeg / playwright 是否就绪
+python -m focus_crawler doctor
 ```
 
 数据目录默认 `%APPDATA%/FocusCrawler/`，可用环境变量 `FOCUSCRAWLER_HOME` 覆盖（测试与便携模式使用）。
@@ -89,11 +101,67 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 
 脚本会安装依赖、运行测试，用 PyInstaller `--onedir` 生成 `dist/FocusCrawler/FocusCrawler.exe`，并以冒烟模式启动一次 exe 验证。Playwright 浏览器与 ffmpeg 为外部依赖，不随包分发。
 
+## yt-dlp 通用解析（可选）
+
+内置适配器只覆盖 B 站 / 网易云等少数站点；启用 yt-dlp 后，任意被 yt-dlp 支持的站点
+（YouTube、Bilibili、Vimeo、Twitter/X、Twitch、各类新闻与短视频站点等 1750+ 站点）
+都能解析出视频 / 音频候选，并走同一套入库、预览、批量下载与 Excel 导出流程。
+
+```json
+{
+  "video": {
+    "enabled": true,
+    "adapter": {
+      "bilibili": true,
+      "ytdlp": {
+        "mode": "auto",
+        "quality": "highest",
+        "format": "",
+        "cookies_file": "",
+        "cookies_from_browser": "",
+        "proxy": ""
+      }
+    }
+  },
+  "audio": {
+    "enabled": true,
+    "adapter": {
+      "ytdlp": { "mode": "auto", "quality": "highest" }
+    }
+  }
+}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `mode` | `off` 关闭；`auto` 仅补漏（本页没嗅到媒体、且站点被 yt-dlp 支持时才解析，默认）；`force` 本页没候选项就对任意站点尝试（含通用提取器，会多一次请求） |
+| `quality` | `highest` / `best` / `worst` / `2160p` / `1440p` / `1080p` / `720p` / `480p` / `360p` |
+| `format` | 自定义 yt-dlp 格式表达式（如 `bv*[height<=1080]+ba/b`），非空时优先于 `quality` |
+| `cookies_file` | Netscape 格式 cookies.txt 路径（登录态 / 会员可见内容） |
+| `cookies_from_browser` | 直接从浏览器读取 Cookies：`chrome` / `edge` / `firefox` 等 |
+| `proxy` | 代理地址，如 `http://127.0.0.1:7890` |
+| `user_agent` | 自定义 UA（默认沿用 yt-dlp 内置 UA） |
+| `socket_timeout` / `retries` | 网络超时与重试次数 |
+| `playlist` / `max_entries` | 是否展开播放列表，以及单页最多取多少条 |
+
+工作方式：
+
+1. **发现**：平台适配器（B 站等）优先；没有结果时按 `mode` 调用 yt-dlp 解析，
+   把每个条目折算成一条媒体记录，`format_id`、标题、清晰度、时长、码率一并入库。
+2. **下载**：`source_kind = ytdlp` 的记录在下载前会用**页面地址**重新解析一次，
+   由 yt-dlp 完成签名刷新、分片下载、音视频合流（需要 ffmpeg）与可选转码；
+   yt-dlp 失败时自动回退到记录里的直链地址。
+3. **降级**：未安装 yt-dlp、页面不是媒体页、站点需要登录等情况只记一条警告，
+   不写入失败表，也不阻塞其它子页。
+
+> 合规提醒：yt-dlp 只下载「页面本身可访问」的原始文件；不提供 DRM 解密、
+> 会员内容绕过或签名逆向。请自行确认版权与站点条款。
+
 ## 架构约定
 
 - 第一层：纯 JSON 配置（选择器 / JSONPath），覆盖静态页面。
 - 第二层：`parser.mode = custom|hybrid` + 本地脚本，脚本只做解析，不发起网络请求。
-- 第三层：登录、验证码、JS 签名、强反爬 —— 主动放弃。
+- 第三层：登录、验证码、JS 签名、强反爬 —— 主动放弃；站点已被 yt-dlp 覆盖时交给 yt-dlp（可带 Cookies）。
 - 子页媒体采集默认 `media_mode = discover_only`，不自动下载；`auto_download` 仍需版权确认。
 
 ## 已知限制
@@ -102,6 +170,8 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 - 音频时长 / 码率优先采用适配器返回值，尚未读取本地音频标签（mutagen）。
 - 不提供商业音乐平台的解密、签名逆向或会员内容绕过；仅下载页面本身可访问的原始文件。
 - 动态媒体嗅探逐子页串行执行（并发 1）；未安装 playwright 时自动回退静态抓取。
+- yt-dlp 解析每个子页最多额外一次请求；`auto` 模式只在站点被 yt-dlp 支持时才触发。
+- yt-dlp 需要合流音视频时依赖 ffmpeg（未安装时只能拿到单一格式）；DRM 内容仍不支持。
 
 ## 假设（信息不足时的默认决策）
 

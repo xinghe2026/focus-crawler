@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlsplit
 from ..config.schema import AudioConfig
 from ..utils.logging import get_logger
 from .media_common import MediaCandidate, guess_format
+from .ytdlp_engine import maybe_resolve as ytdlp_resolve
 
 logger = get_logger("audio_adapter")
 
@@ -32,6 +33,8 @@ class AdapterContext:
     headers: dict[str, str] = field(default_factory=dict)
     user_agent: str = ""
     base_dir: str | Path | None = None
+    # 当前子页已经嗅到的同类媒体数量：yt-dlp 的 auto/force 模式据此判断是否需要补漏
+    existing: int = 0
 
 
 def request_json(ctx: AdapterContext, url: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -166,10 +169,21 @@ def resolve_audio(page_url: str, cfg: AudioConfig, ctx: AdapterContext) -> list[
     if custom is not None:
         return _run_adapter(custom, page_url, ctx, "custom")
 
+    candidates: list[MediaCandidate] = []
     name = adapter_for(page_url, cfg)
-    if name is None:
-        return []
-    module = _load_adapter(name)
-    if module is None:
-        return []
-    return _run_adapter(module, page_url, ctx, name)
+    if name is not None:
+        module = _load_adapter(name)
+        if module is not None:
+            candidates = _run_adapter(module, page_url, ctx, name)
+
+    existing = len(candidates) + max(0, int(getattr(ctx, "existing", 0) or 0))
+    candidates.extend(
+        ytdlp_resolve(
+            page_url,
+            cfg.adapter.ytdlp,
+            kind="audio",
+            headers=dict(ctx.headers or {}),
+            existing_count=existing,
+        )
+    )
+    return candidates

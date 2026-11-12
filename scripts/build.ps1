@@ -32,6 +32,13 @@ if ($LASTEXITCODE -eq 0) {
   Write-Host "检测到 playwright，打包动态嗅探依赖"
   $PyArgs += @("--collect-all", "playwright")
 }
+& $Python -c "import yt_dlp" 2>$null
+if ($LASTEXITCODE -eq 0) {
+  Write-Host "检测到 yt-dlp，打包通用解析依赖（体积约 30MB）"
+  $PyArgs += @("--collect-all", "yt_dlp")
+} else {
+  Write-Host '未安装 yt-dlp，打包产物不含通用解析能力（可选：pip install -e ".[ytdlp]"）'
+}
 & $Python -m PyInstaller @PyArgs scripts/entry_gui.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller 打包失败" }
 

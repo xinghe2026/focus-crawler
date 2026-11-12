@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from ..config.schema import TaskConfig
 from ..models.media import MediaRecord
 from ..models.parse_context import ParseContext
-from ..utils.hash import content_hash, media_hash
+from ..utils.hash import content_hash, media_hash, normalize_url, sha256_text
 from ..utils.logging import get_logger
 from ..utils.paths import media_dir
 from . import image_crawler
@@ -27,6 +27,8 @@ from .media_common import (
     filename_with_format,
     guess_format,
     media_headers,
+    media_origin_url,
+    media_source_kind,
 )
 from .parser import parse_detail
 from .script_engine import ScriptEngine
@@ -108,7 +110,7 @@ class SubpageCollector:
             candidates = sniff_video(page_html, url, self.task.video)
             if dynamic is not None:
                 candidates.extend(dynamic_media_candidates(dynamic.video_urls, "video", dynamic.headers))
-            candidates.extend(self._adapter_video(url, headers, stats))
+            candidates.extend(self._adapter_video(url, headers, stats, existing=len(candidates)))
             stats.videos = self._save_media(
                 candidates[: self.task.video.max_count], url, parent_url, "video", stats
             )
@@ -116,7 +118,7 @@ class SubpageCollector:
             candidates = sniff_audio(page_html, url, self.task.audio)
             if dynamic is not None:
                 candidates.extend(dynamic_media_candidates(dynamic.audio_urls, "audio", dynamic.headers))
-            candidates.extend(self._adapter_audio(url, headers, stats))
+            candidates.extend(self._adapter_audio(url, headers, stats, existing=len(candidates)))
             stats.audios = self._save_media(
                 candidates[: self.task.audio.max_count], url, parent_url, "audio", stats
             )
@@ -210,11 +212,17 @@ class SubpageCollector:
         url: str,
         headers: dict[str, str] | None,
         stats: SubpageStats,
+        existing: int = 0,
     ) -> list[MediaCandidate]:
-        """调用平台视频适配器补充候选；失败按 adapter_error 记录。"""
+        """调用平台视频适配器 + yt-dlp 通用解析补充候选；失败按 adapter_error 记录。"""
         if self.fetcher is None:
             return []
-        ctx = AdapterContext(fetcher=self.fetcher, headers=dict(headers or {}), base_dir=self.base_dir)
+        ctx = AdapterContext(
+            fetcher=self.fetcher,
+            headers=dict(headers or {}),
+            base_dir=self.base_dir,
+            existing=existing,
+        )
         try:
             return resolve_video(url, self.task.video, ctx)
         except AdapterError as exc:
@@ -228,14 +236,16 @@ class SubpageCollector:
         url: str,
         headers: dict[str, str] | None,
         stats: SubpageStats,
+        existing: int = 0,
     ) -> list[MediaCandidate]:
-        """调用平台适配器补充音频候选；失败按 adapter_error 记录。"""
+        """调用平台适配器 + yt-dlp 通用解析补充音频候选；失败按 adapter_error 记录。"""
         if self.fetcher is None:
             return []
         ctx = AdapterContext(
             fetcher=self.fetcher,
             headers=dict(headers or {}),
             base_dir=self.base_dir,
+            existing=existing,
         )
         try:
             return resolve_audio(url, self.task.audio, ctx)
@@ -266,12 +276,24 @@ class SubpageCollector:
             headers_value = (
                 json.dumps(candidate_headers, ensure_ascii=False) if candidate_headers else None
             )
+            dedupe_key = str(extra.get("dedupe_key") or "")
+            record_hash = (
+                media_hash(candidate.url)
+                if not dedupe_key
+                else sha256_text(f"{normalize_url(candidate.url)}::{dedupe_key}")
+            )
+            # yt-dlp 记录额外保存"下载前重新解析"的页面地址（播放列表条目与来源页可能不同）
+            origin_url = (
+                str(extra.get("page_url") or "") or None
+                if (candidate.source_kind or "").startswith("ytdlp")
+                else None
+            )
             record = MediaRecord(
                 task_id=self.task_id,
                 source_url=source_url,
                 parent_url=parent_url,
                 media_url=candidate.url,
-                media_hash=media_hash(candidate.url),
+                media_hash=record_hash,
                 media_type=media_type,
                 format=candidate.format or guess_format(candidate.url),
                 width=candidate.width,
@@ -281,6 +303,8 @@ class SubpageCollector:
                 sample_rate=extra.get("sample_rate"),
                 quality=candidate.quality,
                 headers=headers_value,
+                source_kind=candidate.source_kind or None,
+                origin_url=origin_url,
                 status="discovered",
                 discovered_at=datetime.now().replace(microsecond=0).isoformat(sep=" "),
             )
@@ -344,6 +368,8 @@ class SubpageCollector:
                     media_id=media_id,
                     ffmpeg_path=self.ffmpeg_path,
                     headers=headers,
+                    source_kind=media_source_kind(row),
+                    page_url=media_origin_url(row) or row["source_url"],
                 )
             else:
                 path, size = download_audio(
@@ -355,6 +381,8 @@ class SubpageCollector:
                     media_id=media_id,
                     ffmpeg_path=self.ffmpeg_path,
                     headers=headers,
+                    source_kind=media_source_kind(row),
+                    page_url=media_origin_url(row) or row["source_url"],
                 )
         except MediaDownloadError as exc:
             self.store.update_media(media_id, status="failed", error=str(exc))

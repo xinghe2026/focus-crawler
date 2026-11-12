@@ -13,6 +13,7 @@ from .dynamic_sniffer import DynamicPage, DynamicSniffError
 from .media_common import dynamic_media_candidates
 from .parser import ParsedPage, parse_detail, summarize_hits
 from .video_sniffer import sniff_static as sniff_video
+from .ytdlp_engine import maybe_resolve as ytdlp_resolve
 
 
 @dataclass
@@ -150,6 +151,28 @@ def preview_task(
                 videos.extend(dynamic_media_candidates(dynamic.video_urls, "video", dynamic.headers))
             if task.audio.enabled:
                 audios.extend(dynamic_media_candidates(dynamic.audio_urls, "audio", dynamic.headers))
+        # 与运行时一致：静态/动态嗅探都没结果时，预览也给出 yt-dlp 的结果
+        page_headers = dict((dynamic.headers if dynamic is not None else fetched_sub.headers) or {})
+        if task.video.enabled:
+            videos.extend(
+                ytdlp_resolve(
+                    link,
+                    task.video.adapter.ytdlp,
+                    kind="video",
+                    headers=page_headers,
+                    existing_count=len(videos),
+                )
+            )
+        if task.audio.enabled:
+            audios.extend(
+                ytdlp_resolve(
+                    link,
+                    task.audio.adapter.ytdlp,
+                    kind="audio",
+                    headers=page_headers,
+                    existing_count=len(audios),
+                )
+            )
         sub.images, sub.videos, sub.audios = len(images), len(videos), len(audios)
         sub.image_example = [item.url for item in images[:5]]
         sub.video_example = [item.url for item in videos[:5]]

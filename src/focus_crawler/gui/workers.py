@@ -15,7 +15,7 @@ from ..core.audio_downloader import download_audio
 from ..core.dynamic_sniffer import playwright_available, sniff_page
 from ..core.fetcher import Fetcher
 from ..core.hotlink import resolve_headers
-from ..core.media_common import download_direct, media_headers
+from ..core.media_common import download_direct, media_headers, media_origin_url, media_source_kind
 from ..core.media_downloader import MediaDownloader
 from ..core.media_refresh import refresh_audio
 from ..core.preview import preview_task
@@ -244,6 +244,8 @@ class MediaDownloadWorker(QObject):
                     store=store,
                     media_id=int(row["id"]),
                     ffmpeg_path=ffmpeg,
+                    source_kind=media_source_kind(row),
+                    page_url=media_origin_url(row) or row["source_url"],
                     headers=resolve_headers(
                         self.task.hotlink,
                         row["media_url"],
@@ -283,6 +285,8 @@ class MediaDownloadWorker(QObject):
                         media_id=int(row["id"]),
                         ffmpeg_path=ffmpeg,
                         headers=headers,
+                        source_kind=media_source_kind(row),
+                        page_url=media_origin_url(row) or source_url,
                         should_stop=lambda: self._stop,
                         should_pause=lambda: self._pause,
                     )

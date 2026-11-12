@@ -9,6 +9,7 @@ from ..config.schema import VideoConfig
 from ..utils.logging import get_logger
 from .audio_adapter import AdapterContext, AdapterError
 from .media_common import MediaCandidate, guess_format
+from .ytdlp_engine import maybe_resolve as ytdlp_resolve
 
 logger = get_logger("video_adapter")
 
@@ -78,16 +79,28 @@ def _validate_results(results: Any, name: str) -> list[MediaCandidate]:
 
 
 def resolve_video(page_url: str, cfg: VideoConfig, ctx: AdapterContext) -> list[MediaCandidate]:
+    """平台适配器优先，没有结果时按 ``ytdlp.mode``（off/auto/force）兜底。"""
+    candidates: list[MediaCandidate] = []
     name = adapter_for(page_url, cfg)
-    if name is None:
-        return []
-    module = _load_adapter(name)
-    if module is None:
-        return []
-    try:
-        results = module.resolve_video(page_url, ctx)
-    except AdapterError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - 适配器内部异常统一分类
-        raise AdapterError(f"适配器执行异常：{exc}") from exc
-    return _validate_results(results, name)
+    if name is not None:
+        module = _load_adapter(name)
+        if module is not None:
+            try:
+                results = module.resolve_video(page_url, ctx)
+            except AdapterError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - 适配器内部异常统一分类
+                raise AdapterError(f"适配器执行异常：{exc}") from exc
+            candidates = _validate_results(results, name)
+
+    existing = len(candidates) + max(0, int(getattr(ctx, "existing", 0) or 0))
+    candidates.extend(
+        ytdlp_resolve(
+            page_url,
+            cfg.adapter.ytdlp,
+            kind="video",
+            headers=dict(ctx.headers or {}),
+            existing_count=existing,
+        )
+    )
+    return candidates

@@ -285,6 +285,9 @@ def test_default_task_raw_supports_single_page_media(qapp):
     assert raw["video"]["enabled"] is True
     assert raw["audio"]["enabled"] is True
     assert raw["video"]["adapter"]["bilibili"] is True
+    # 新建任务默认开启 yt-dlp 补漏（auto 模式）
+    assert raw["video"]["adapter"]["ytdlp"]["mode"] == "auto"
+    assert raw["audio"]["adapter"]["ytdlp"]["mode"] == "auto"
 
 
 def test_save_task_appends_suffix_for_duplicate_name(qapp):

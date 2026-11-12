@@ -26,6 +26,9 @@ class MediaRecord:
     file_size: int | None = None
     local_path: str | None = None
     headers: str | None = None
+    source_kind: str | None = None
+    # yt-dlp 记录：下载前用于重新解析的页面地址（播放列表条目与来源页可能不同）
+    origin_url: str | None = None
     status: str = "discovered"
     error: str | None = None
     discovered_at: str | None = None

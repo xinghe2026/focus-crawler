@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS media (
   file_size INTEGER,
   local_path TEXT,
   headers TEXT,
+  source_kind TEXT,
+  origin_url TEXT,
   status TEXT NOT NULL DEFAULT 'discovered',
   error TEXT,
   discovered_at TEXT,
@@ -157,6 +159,12 @@ class Storage:
         columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(media)")}
         if "headers" not in columns:
             self.conn.execute("ALTER TABLE media ADD COLUMN headers TEXT")
+        if "source_kind" not in columns:
+            # 老库升级：记录媒体来源（静态嗅探 / 平台适配器 / yt-dlp 等）
+            self.conn.execute("ALTER TABLE media ADD COLUMN source_kind TEXT")
+        if "origin_url" not in columns:
+            # 老库升级：yt-dlp 记录重新解析用的页面地址
+            self.conn.execute("ALTER TABLE media ADD COLUMN origin_url TEXT")
 
     def close(self) -> None:
         self.conn.close()
@@ -339,8 +347,8 @@ class Storage:
             """INSERT OR IGNORE INTO media
                (task_id, source_url, parent_url, media_url, media_hash, media_type, format,
                 width, height, duration, bitrate, sample_rate, quality, file_size, local_path,
-                headers, status, error, discovered_at, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                headers, source_kind, origin_url, status, error, discovered_at, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 record.task_id,
                 record.source_url,
@@ -358,6 +366,8 @@ class Storage:
                 record.file_size,
                 record.local_path,
                 record.headers,
+                record.source_kind,
+                record.origin_url,
                 record.status,
                 record.error,
                 record.discovered_at or ts,

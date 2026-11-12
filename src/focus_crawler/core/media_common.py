@@ -216,6 +216,24 @@ def media_headers(row: Any) -> dict[str, str] | None:
     return {str(key): str(value) for key, value in payload.items()}
 
 
+def media_source_kind(row: Any) -> str | None:
+    """读取媒体记录里的来源标记（静态嗅探 / 适配器 / yt-dlp），老库可能没有该列。"""
+    try:
+        value = row["source_kind"]
+    except (IndexError, KeyError, TypeError):
+        return None
+    return str(value) if value else None
+
+
+def media_origin_url(row: Any) -> str | None:
+    """读取媒体记录里"下载前重新解析"的页面地址（yt-dlp 记录才有）。"""
+    try:
+        value = row["origin_url"]
+    except (IndexError, KeyError, TypeError):
+        return None
+    return str(value) if value else None
+
+
 def _direct_attempt_urls(fallback: MediaFallbackConfig | None, url: str) -> list[str]:
     """按顺序给出直链下载要尝试的 URL：能解析时先用原地址，解析失败则先用镜像。"""
     if fallback is None:

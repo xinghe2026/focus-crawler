@@ -12,6 +12,7 @@ PARSER_MODES = ("auto", "custom", "hybrid")
 RENDER_MODES = ("static", "playwright")
 FIELD_TYPES = ("text", "html", "attr", "current_url", "json")
 FIELD_TRANSFORMS = ("strip", "date", "lower", "upper", "int", "float", "absolute_url")
+YTDLP_MODES = ("off", "auto", "force")
 
 
 class ConfigError(ValueError):
@@ -113,7 +114,7 @@ class CrawlConfig:
         delay: tuple[int, int] = (800, 2000)
         if delay_raw is not None:
             if (
-                isinstance(delay_raw, list)
+                isinstance(delay_raw, (list, tuple))
                 and len(delay_raw) == 2
                 and all(_is_int(item) and item >= 0 for item in delay_raw)
             ):
@@ -404,14 +405,62 @@ class ImageConfig:
 
 
 @dataclass
+class YtdlpConfig:
+    """yt-dlp 通用解析/下载开关（可选依赖）。
+
+    mode:
+      * ``off``   —— 不解析
+      * ``auto``  —— 仅当本页没有嗅到任何媒体，且站点被 yt-dlp 支持时才解析（默认）
+      * ``force`` —— 本页没有候选就对任意站点尝试（含通用提取器，会多一次请求）
+    """
+
+    mode: str = "auto"
+    quality: str = "highest"
+    format: str = ""
+    cookies_file: str = ""
+    cookies_from_browser: str = ""
+    proxy: str = ""
+    user_agent: str = ""
+    socket_timeout: int = 30
+    retries: int = 3
+    playlist: bool = False
+    max_entries: int = 20
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode != "off"
+
+    @classmethod
+    def from_dict(cls, raw: Any, errors: list[str], prefix: str = "ytdlp") -> "YtdlpConfig":
+        data = _read_mapping(raw, prefix, errors)
+        return cls(
+            mode=_read_choice(data.get("mode"), f"{prefix}.mode", errors, YTDLP_MODES, "auto"),
+            quality=_read_str(data.get("quality"), f"{prefix}.quality", errors, "highest") or "highest",
+            format=_read_str(data.get("format"), f"{prefix}.format", errors),
+            cookies_file=_read_str(data.get("cookies_file"), f"{prefix}.cookies_file", errors),
+            cookies_from_browser=_read_str(
+                data.get("cookies_from_browser"), f"{prefix}.cookies_from_browser", errors
+            ),
+            proxy=_read_str(data.get("proxy"), f"{prefix}.proxy", errors),
+            user_agent=_read_str(data.get("user_agent"), f"{prefix}.user_agent", errors),
+            socket_timeout=_read_int(data.get("socket_timeout"), f"{prefix}.socket_timeout", errors, 30, 1),
+            retries=_read_int(data.get("retries"), f"{prefix}.retries", errors, 3, 0),
+            playlist=_read_bool(data.get("playlist"), f"{prefix}.playlist", errors, False),
+            max_entries=_read_int(data.get("max_entries"), f"{prefix}.max_entries", errors, 20, 1),
+        )
+
+
+@dataclass
 class VideoAdapterConfig:
     bilibili: bool = True
+    ytdlp: YtdlpConfig = field(default_factory=YtdlpConfig)
 
     @classmethod
     def from_dict(cls, raw: Any, errors: list[str], prefix: str = "video.adapter") -> "VideoAdapterConfig":
         data = _read_mapping(raw, prefix, errors)
         return cls(
             bilibili=_read_bool(data.get("bilibili"), f"{prefix}.bilibili", errors, True),
+            ytdlp=YtdlpConfig.from_dict(data.get("ytdlp"), errors, f"{prefix}.ytdlp"),
         )
 
 
@@ -457,6 +506,7 @@ class AudioAdapterConfig:
     bilibili: bool = True
     music_163: bool = False
     custom_script: str = ""
+    ytdlp: YtdlpConfig = field(default_factory=YtdlpConfig)
 
     @classmethod
     def from_dict(cls, raw: Any, errors: list[str], prefix: str = "audio.adapter") -> "AudioAdapterConfig":
@@ -465,6 +515,7 @@ class AudioAdapterConfig:
             bilibili=_read_bool(data.get("bilibili"), f"{prefix}.bilibili", errors, True),
             music_163=_read_bool(data.get("music_163"), f"{prefix}.music_163", errors, False),
             custom_script=_read_str(data.get("custom_script"), f"{prefix}.custom_script", errors),
+            ytdlp=YtdlpConfig.from_dict(data.get("ytdlp"), errors, f"{prefix}.ytdlp"),
         )
 
 

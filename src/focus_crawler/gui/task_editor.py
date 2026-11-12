@@ -30,7 +30,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config.schema import ConfigError, TaskConfig
+from ..config.schema import ConfigError, TaskConfig, YTDLP_MODES
+from ..core import ytdlp_engine
 from . import settings
 
 
@@ -76,6 +77,10 @@ def join_headers_text(headers: dict[str, str]) -> str:
 
 DEFAULT_SUBPAGE_TYPES = ["data", "image", "video", "audio"]
 DEFAULT_VIDEO_SNIFF = ["m3u8", "mp4", "flv"]
+YTDLP_MODE_LABELS = {"off": "关闭", "auto": "仅补漏（默认）", "force": "积极（未知站点也尝试）"}
+YTDLP_QUALITY_PRESETS = {
+    "highest", "best", "worst", "2160p", "1440p", "1080p", "720p", "480p", "360p", "ba",
+}
 DEFAULT_AUDIO_SNIFF = ["mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "hls_audio", "dash_audio"]
 DEFAULT_IMAGE_FORMATS = ["jpg", "jpeg", "png", "gif", "webp"]
 DEFAULT_IMAGE_EXCLUDE = ["logo", "icon", "avatar", "banner"]
@@ -156,7 +161,17 @@ def default_task_raw(crawl: dict | None = None) -> dict:
             "ffmpeg_path": settings.ffmpeg_path(),
             "headers": {},
             "copyright_confirm": True,
-            "adapter": {"bilibili": True},
+            "adapter": {
+                "bilibili": True,
+                "ytdlp": {
+                    "mode": "auto",
+                    "quality": "highest",
+                    "format": "",
+                    "cookies_file": "",
+                    "cookies_from_browser": "",
+                    "proxy": "",
+                },
+            },
         },
         "audio": {
             "enabled": True,
@@ -168,7 +183,19 @@ def default_task_raw(crawl: dict | None = None) -> dict:
             "concurrency": 3,
             "prefer_original_format": True,
             "transcode_to": None,
-            "adapter": {"bilibili": True, "music_163": False, "custom_script": ""},
+            "adapter": {
+                "bilibili": True,
+                "music_163": False,
+                "custom_script": "",
+                "ytdlp": {
+                    "mode": "auto",
+                    "quality": "highest",
+                    "format": "",
+                    "cookies_file": "",
+                    "cookies_from_browser": "",
+                    "proxy": "",
+                },
+            },
             "headers": {},
             "copyright_confirm": True,
         },
@@ -218,6 +245,56 @@ def _scrollable(widget: QWidget) -> QScrollArea:
 def _section(raw: dict, name: str) -> dict:
     value = raw.get(name)
     return value if isinstance(value, dict) else {}
+
+
+def _choice_combo(values: tuple[str, ...], labels: dict[str, str], current: str = "") -> QComboBox:
+    """带中文标签的下拉框：itemData 保存真实配置值。"""
+    combo = QComboBox()
+    for value in values:
+        combo.addItem(labels.get(value, value), value)
+    index = combo.findData(current)
+    combo.setCurrentIndex(index if index >= 0 else 0)
+    return combo
+
+
+def _fill_ytdlp(
+    data: dict,
+    mode: QComboBox,
+    quality: QLineEdit,
+    cookies: QLineEdit,
+    browser: QLineEdit,
+    proxy: QLineEdit,
+) -> None:
+    """把任务配置里的 video.adapter.ytdlp / audio.adapter.ytdlp 回填到控件。"""
+    mode_value = str(data.get("mode") or "auto")
+    index = mode.findData(mode_value)
+    mode.setCurrentIndex(index if index >= 0 else mode.findData("auto"))
+    quality.setText(str(data.get("format") or data.get("quality") or ""))
+    cookies.setText(str(data.get("cookies_file") or ""))
+    browser.setText(str(data.get("cookies_from_browser") or ""))
+    proxy.setText(str(data.get("proxy") or ""))
+
+
+def _collect_ytdlp(
+    mode: QComboBox,
+    quality: QLineEdit,
+    cookies: QLineEdit,
+    browser: QLineEdit,
+    proxy: QLineEdit,
+) -> dict[str, Any]:
+    """从控件收集 yt-dlp 配置；格式/画质留空时回落到 highest。"""
+    text = quality.text().strip()
+    # 画质预设（highest/1080p…）写进 quality；自定义格式表达式写进 format
+    preset = text if text in YTDLP_QUALITY_PRESETS else "highest"
+    custom_format = "" if text in YTDLP_QUALITY_PRESETS else text
+    return {
+        "mode": str(mode.currentData() or "auto"),
+        "quality": preset,
+        "format": custom_format,
+        "cookies_file": cookies.text().strip(),
+        "cookies_from_browser": browser.text().strip(),
+        "proxy": proxy.text().strip(),
+    }
 
 
 def detail_fields_raw(raw: dict) -> dict:
@@ -530,12 +607,28 @@ class TaskEditorDialog(QDialog):
         self.video_use_ffmpeg = QCheckBox("使用 ffmpeg 合并")
         self.video_ffmpeg_path = QLineEdit()
         self.video_adapter_bilibili = QCheckBox("启用 B 站视频适配器（完整 MP4）")
+        self.video_ytdlp_mode = _choice_combo(YTDLP_MODES, YTDLP_MODE_LABELS)
+        self.video_ytdlp_quality = QLineEdit()
+        self.video_ytdlp_quality.setPlaceholderText("highest / 1080p / bv*+ba（留空用 highest）")
+        self.video_ytdlp_cookies = QLineEdit()
+        self.video_ytdlp_cookies.setPlaceholderText("可留空，Netscape 格式 cookies.txt 路径")
+        self.video_ytdlp_browser = QLineEdit()
+        self.video_ytdlp_browser.setPlaceholderText("可留空，例如 chrome / edge / firefox")
+        self.video_ytdlp_proxy = QLineEdit()
+        self.video_ytdlp_proxy.setPlaceholderText("可留空，例如 http://127.0.0.1:7890")
+        self.ytdlp_status = QLabel(ytdlp_engine.describe())
         video_form.addRow("", self.video_enabled)
         video_form.addRow("嗅探类型", self.video_sniff_types)
         video_form.addRow("最大数量", self.video_max_count)
         video_form.addRow("下载目录", self.video_download_dir)
         video_form.addRow("清晰度偏好", self.video_quality)
         video_form.addRow("", self.video_adapter_bilibili)
+        video_form.addRow("yt-dlp 通用解析", self.video_ytdlp_mode)
+        video_form.addRow("yt-dlp 画质/格式", self.video_ytdlp_quality)
+        video_form.addRow("yt-dlp Cookies 文件", self.video_ytdlp_cookies)
+        video_form.addRow("yt-dlp 浏览器 Cookies", self.video_ytdlp_browser)
+        video_form.addRow("yt-dlp 代理", self.video_ytdlp_proxy)
+        video_form.addRow("yt-dlp 环境", self.ytdlp_status)
         video_form.addRow("", self.video_use_ffmpeg)
         video_form.addRow("ffmpeg 路径", self.video_ffmpeg_path)
         outer.addWidget(video_group)
@@ -553,6 +646,15 @@ class TaskEditorDialog(QDialog):
         self.adapter_music_163 = QCheckBox("启用网易云音乐适配器")
         self.adapter_custom_script = QLineEdit()
         self.adapter_custom_script.setPlaceholderText("可留空，例如 custom_adapter.py（需导出 resolve_audio）")
+        self.audio_ytdlp_mode = _choice_combo(YTDLP_MODES, YTDLP_MODE_LABELS)
+        self.audio_ytdlp_quality = QLineEdit()
+        self.audio_ytdlp_quality.setPlaceholderText("highest / ba（留空用 highest）")
+        self.audio_ytdlp_cookies = QLineEdit()
+        self.audio_ytdlp_cookies.setPlaceholderText("可留空，Netscape 格式 cookies.txt 路径")
+        self.audio_ytdlp_browser = QLineEdit()
+        self.audio_ytdlp_browser.setPlaceholderText("可留空，例如 chrome / edge / firefox")
+        self.audio_ytdlp_proxy = QLineEdit()
+        self.audio_ytdlp_proxy.setPlaceholderText("可留空，例如 http://127.0.0.1:7890")
         audio_form.addRow("", self.audio_enabled)
         audio_form.addRow("嗅探类型", self.audio_sniff_types)
         audio_form.addRow("最大数量", self.audio_max_count)
@@ -562,6 +664,11 @@ class TaskEditorDialog(QDialog):
         audio_form.addRow("", self.adapter_bilibili)
         audio_form.addRow("", self.adapter_music_163)
         audio_form.addRow("自定义适配器", self.adapter_custom_script)
+        audio_form.addRow("yt-dlp 通用解析", self.audio_ytdlp_mode)
+        audio_form.addRow("yt-dlp 音质/格式", self.audio_ytdlp_quality)
+        audio_form.addRow("yt-dlp Cookies 文件", self.audio_ytdlp_cookies)
+        audio_form.addRow("yt-dlp 浏览器 Cookies", self.audio_ytdlp_browser)
+        audio_form.addRow("yt-dlp 代理", self.audio_ytdlp_proxy)
         outer.addWidget(audio_group)
 
         export_group = QGroupBox("Excel 导出")
@@ -682,7 +789,16 @@ class TaskEditorDialog(QDialog):
         self.video_quality.setText(str(video.get("preferred_quality", "highest") or "highest"))
         self.video_use_ffmpeg.setChecked(bool(video.get("use_ffmpeg", True)))
         self.video_ffmpeg_path.setText(str(video.get("ffmpeg_path") or settings.ffmpeg_path()))
-        self.video_adapter_bilibili.setChecked(bool(_section(video, "adapter").get("bilibili", True)))
+        video_adapter = _section(video, "adapter")
+        self.video_adapter_bilibili.setChecked(bool(video_adapter.get("bilibili", True)))
+        _fill_ytdlp(
+            _section(video_adapter, "ytdlp"),
+            self.video_ytdlp_mode,
+            self.video_ytdlp_quality,
+            self.video_ytdlp_cookies,
+            self.video_ytdlp_browser,
+            self.video_ytdlp_proxy,
+        )
 
         audio_adapter = _section(audio, "adapter")
         self.audio_enabled.setChecked(bool(audio.get("enabled", False)))
@@ -694,6 +810,14 @@ class TaskEditorDialog(QDialog):
         self.adapter_bilibili.setChecked(bool(audio_adapter.get("bilibili", True)))
         self.adapter_music_163.setChecked(bool(audio_adapter.get("music_163", False)))
         self.adapter_custom_script.setText(str(audio_adapter.get("custom_script") or ""))
+        _fill_ytdlp(
+            _section(audio_adapter, "ytdlp"),
+            self.audio_ytdlp_mode,
+            self.audio_ytdlp_quality,
+            self.audio_ytdlp_cookies,
+            self.audio_ytdlp_browser,
+            self.audio_ytdlp_proxy,
+        )
 
         self.excel_file.setText(str(excel.get("file", "output.xlsx") or "output.xlsx"))
         self.excel_sheet.setText(str(excel.get("sheet", "data") or "data"))
@@ -892,6 +1016,13 @@ class TaskEditorDialog(QDialog):
         video = raw.setdefault("video", {})
         video_adapter = video.get("adapter") if isinstance(video.get("adapter"), dict) else {}
         video_adapter.update({"bilibili": self.video_adapter_bilibili.isChecked()})
+        video_adapter["ytdlp"] = _collect_ytdlp(
+            self.video_ytdlp_mode,
+            self.video_ytdlp_quality,
+            self.video_ytdlp_cookies,
+            self.video_ytdlp_browser,
+            self.video_ytdlp_proxy,
+        )
         video.update(
             {
                 "enabled": self.video_enabled.isChecked(),
@@ -912,6 +1043,13 @@ class TaskEditorDialog(QDialog):
                 "bilibili": self.adapter_bilibili.isChecked(),
                 "music_163": self.adapter_music_163.isChecked(),
                 "custom_script": self.adapter_custom_script.text().strip(),
+                "ytdlp": _collect_ytdlp(
+                    self.audio_ytdlp_mode,
+                    self.audio_ytdlp_quality,
+                    self.audio_ytdlp_cookies,
+                    self.audio_ytdlp_browser,
+                    self.audio_ytdlp_proxy,
+                ),
             }
         )
         audio.update(
