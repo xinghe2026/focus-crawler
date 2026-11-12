@@ -1,0 +1,78 @@
+{
+  "task_name": "example_com",
+  "start_urls": ["https://example.com/index.html"],
+  "allowed_domains": ["example.com"],
+  "url_rules": {
+    "include": ["/article/", "/page/\\d+\\.html"],
+    "exclude": ["/login", "javascript:", "#"]
+  },
+  "crawl": {
+    "max_depth": 1,
+    "max_pages": 200,
+    "concurrency": 1,
+    "delay_ms": [1000, 2000],
+    "timeout_ms": 20000,
+    "retry": 2,
+    "respect_robots": true
+  },
+  "link_discovery": {
+    "mode": "auto",
+    "selector": "a",
+    "href_attribute": "href",
+    "include": [],
+    "exclude": ["/login", "javascript:", "#"],
+    "max_links_per_page": 200,
+    "follow_next_page": false,
+    "deduplicate": true
+  },
+  "subpage_collect": {
+    "enabled": true,
+    "types": ["data", "image"],
+    "data_as": "detail",
+    "media_mode": "discover_only",
+    "render_for_media": false,
+    "max_subpages": 200,
+    "preview_limit": 5,
+    "concurrency": 1,
+    "auto_download_images": false,
+    "auto_download_videos": false,
+    "auto_download_audios": false,
+    "copyright_confirm": true
+  },
+  "parser": {
+    "mode": "hybrid",
+    "list_script": "list_parser.py",
+    "detail_script": "detail_parser.py",
+    "script_timeout_ms": 5000,
+    "fallback_to_selector": true
+  },
+  "list": {
+    "item_selector": "a",
+    "link_selector": "self",
+    "next_page_selector": null
+  },
+  "detail": {
+    "title": {"selector": "h1", "type": "text", "transform": ["strip"]},
+    "content": {"selector": ".content", "type": "text"},
+    "date": {"selector": ".date", "type": "text", "transform": ["strip", "date"]},
+    "url": {"selector": null, "type": "current_url"}
+  },
+  "image": {
+    "enabled": true,
+    "min_width": 300,
+    "min_height": 300,
+    "formats": ["jpg", "jpeg", "png", "gif", "webp"],
+    "include_keywords": [],
+    "exclude_keywords": ["logo", "icon", "avatar", "banner"],
+    "max_count": 2000
+  },
+  "video": {"enabled": false},
+  "audio": {"enabled": false},
+  "export": {
+    "excel": {
+      "file": "example_com.xlsx",
+      "sheet": "data",
+      "columns": ["title", "content", "date", "url"]
+    }
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "task_name": "fixture_site",
+  "start_urls": ["http://fixture.test/entry.html"],
+  "allowed_domains": ["fixture.test"],
+  "url_rules": {
+    "include": [],
+    "exclude": ["/login"]
+  },
+  "crawl": {
+    "max_depth": 1,
+    "max_pages": 50,
+    "concurrency": 1,
+    "delay_ms": [0, 0],
+    "timeout_ms": 5000,
+    "retry": 0,
+    "respect_robots": false
+  },
+  "link_discovery": {
+    "mode": "auto",
+    "selector": "a",
+    "href_attribute": "href",
+    "include": [],
+    "exclude": ["/login", "javascript:", "#"],
+    "max_links_per_page": 200,
+    "follow_next_page": false,
+    "deduplicate": true
+  },
+  "subpage_collect": {
+    "enabled": true,
+    "types": ["data", "image", "video", "audio"],
+    "data_as": "detail",
+    "media_mode": "discover_only",
+    "render_for_media": false,
+    "max_subpages": 50,
+    "preview_limit": 5,
+    "concurrency": 1,
+    "auto_download_images": false,
+    "auto_download_videos": false,
+    "auto_download_audios": false,
+    "copyright_confirm": true
+  },
+  "parser": {
+    "mode": "auto",
+    "list_script": "",
+    "detail_script": "",
+    "script_timeout_ms": 5000,
+    "fallback_to_selector": true
+  },
+  "list": {
+    "item_selector": "a",
+    "link_selector": "self",
+    "next_page_selector": null
+  },
+  "detail": {
+    "title": {"selector": "h1", "type": "text"},
+    "content": {"selector": ".content", "type": "text"},
+    "date": {"selector": ".date", "type": "text", "transform": ["strip", "date"]},
+    "url": {"selector": null, "type": "current_url"}
+  },
+  "image": {
+    "enabled": true,
+    "min_width": 0,
+    "min_height": 0,
+    "formats": ["jpg", "jpeg", "png", "gif", "webp"],
+    "include_keywords": [],
+    "exclude_keywords": [],
+    "max_count": 100,
+    "download_dir": "media/images",
+    "concurrency": 2
+  },
+  "video": {
+    "enabled": true,
+    "sniff_types": ["m3u8", "mp4", "flv"],
+    "max_count": 20,
+    "download_dir": "media/videos",
+    "preferred_quality": "highest",
+    "use_ffmpeg": true,
+    "ffmpeg_path": "ffmpeg",
+    "headers": {},
+    "copyright_confirm": true
+  },
+  "audio": {
+    "enabled": true,
+    "sniff_types": ["mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "hls_audio", "dash_audio"],
+    "include_keywords": [],
+    "exclude_keywords": [],
+    "max_count": 100,
+    "download_dir": "media/audio",
+    "concurrency": 2,
+    "prefer_original_format": true,
+    "transcode_to": null,
+    "adapter": {"bilibili": true, "music_163": false, "custom_script": ""},
+    "headers": {},
+    "copyright_confirm": true
+  },
+  "export": {
+    "excel": {
+      "file": "fixture_output.xlsx",
+      "sheet": "data"
+    }
+  }
+}
