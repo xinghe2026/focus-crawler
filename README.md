@@ -49,6 +49,12 @@
 | 分段并发下载引擎（借鉴 Mister Download Manager / IDM 的动态分段规划）：多连接、动态拆分、断点续传、限速、暂停停止 | 完成 |
 | 自适应选择器（借鉴 Scrapling 的 adaptive relocation）：页面改版后按元素指纹重新定位字段并回写 | 完成 |
 | 终端风界面主题：深黑底 + 荧光绿 + 等宽字体 + HUD 状态条，覆盖主窗口 / 表格 / 对话框 / 滚动条 | 完成 |
+| Spider API（`spiders/`）：start_urls / parse / Request / Response、异步回调、`async for item in spider.stream()` | 完成 |
+| 并发爬行 + 自动油门（AIMD）+ Retry-After + 阻塞检测重试 + 每域独立节流 | 完成 |
+| 多会话（HTTP / 浏览器按 ID 路由）、TLS 指纹（curl_cffi）、代理轮换、域名/广告拦截、DoH、CDP 远程浏览器、后台 API 捕获 | 完成 |
+| 暂停与继续（crawldir 快照）、开发模式（响应缓存重放）、robots.txt（含 Crawl-delay / Request-rate） | 完成 |
+| 现成模板：CrawlSpider / SitemapSpider / XMLFeedSpider / CSVFeedSpider / ShopifySpider | 完成 |
+| LinkExtractor（allow/deny、域名、CSS/XPath 范围、扩展过滤、规范化）与 JSON/JSONL/CSV/XML 导出器 | 完成 |
 | PyInstaller `--onedir` 打包：`scripts/build.ps1`、GUI 入口、测试与 exe 冒烟自检 | 完成 |
 
 ## 安装
@@ -171,6 +177,79 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 > 合规提醒：yt-dlp 只下载「页面本身可访问」的原始文件；不提供 DRM 解密、
 > 会员内容绕过或签名逆向。请自行确认版权与站点条款。
 
+## Spider：类 Scrapy 的爬虫 API
+
+除了「JSON 配置驱动」的任务模式，项目还提供一套 Python 爬虫 API（`focus_crawler.spiders`），
+覆盖 Scrapling 的 Spider 能力面（独立实现）：
+
+```python
+from focus_crawler.spiders import Item, Request, Spider
+
+class BlogSpider(Spider):
+    name = "blog"
+    start_urls = ["https://example.com/"]
+    custom_settings = {"concurrency": 8, "delay": 0.3, "robots_txt_obey": True}
+
+    async def parse(self, response):
+        yield Item(title=response.css("h1::text").get(), url=response.url)
+        for href in response.css("a::attr(href)").getall():
+            yield response.follow(href)
+```
+
+运行：
+
+```powershell
+# 同步跑完并导出
+python -m focus_crawler spider my_spider.py:BlogSpider --output blog.jsonl --format jsonl
+
+# 断点续跑 / 开发模式（缓存响应，不重复打站点）
+python -m focus_crawler spider my_spider.py:BlogSpider --crawldir ./crawl --dev-mode
+```
+
+```python
+spider = BlogSpider()
+items = spider.start()                    # 同步
+
+async for item in spider.stream():        # 流式
+    print(item["title"])
+
+spider.export("out.csv")                  # 导出
+```
+
+### 引擎能力
+
+| 能力 | 实现 |
+| --- | --- |
+| 并发 | `concurrency` 控制同时在飞的请求数 |
+| 自动油门 | 每域名 AIMD：正常逐渐加速，命中 403/429/503 或 captcha 立即翻倍，`Retry-After` 直接生效 |
+| 阻塞检测 | 状态码 + 页面特征词；命中后按退避重试 |
+| robots.txt | `robots_txt_obey`，并采纳 `Crawl-delay` / `Request-rate` |
+| 断点 | `crawldir/state.json` 记录已见 URL 与待处理请求，`pause()` / Ctrl+C 优雅保存 |
+| 开发模式 | `dev_mode` 把响应写 `crawldir/cache`，下次直接重放 |
+| 多会话 | `Request.session = "chrome"` 路由到浏览器会话；HTTP 会话支持 curl_cffi TLS 指纹 |
+| 反检测 | 浏览器会话默认关闭自动化特征、可 `cdp_url` 连远程浏览器 |
+| 代理 | `proxies` 轮换（round_robin / random），支持按会话配置 |
+| 拦截 | `block_domains` + `block_ads`（内置约 24 个常见广告/统计域名） |
+| DNS | `dns_over_https` 经 Cloudflare DoH 解析 |
+| API 捕获 | 浏览器会话 `record_requests=True`，`search_network()` 检索已加载响应 |
+
+### 模板与工具
+
+```python
+from focus_crawler.spiders import (
+    CrawlSpider, SitemapSpider, XMLFeedSpider, CSVFeedSpider, ShopifySpider,
+    LinkExtractor, Rule, export_items,
+)
+
+class Blog(CrawlSpider):
+    start_urls = ["https://blog.example.com/"]
+    rules = [Rule(LinkExtractor(allow=r"/post/"), callback="parse_post", follow=True)]
+```
+
+* `LinkExtractor`：allow / deny 正则、allow_domains / deny_domains、
+  restrict_css / restrict_xpaths、deny_extensions、URL 规范化与去重；
+* 导出：`export_items(items, path, "json"|"jsonl"|"csv"|"xml")`。
+
 ## 分段下载引擎
 
 直链媒体走 :mod:`focus_crawler.core.segmented_downloader`，规则参考 IDM 公开文档与
@@ -243,4 +322,4 @@ Mister Download Manager（GPL-3.0，**仅借鉴算法，代码为独立实现**�
 | --- | --- | --- |
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Unlicense | 可选依赖，直接调用其解析 / 下载能力 |
 | [Mister Download Manager](https://github.com/anefzaoui/misterdownloadmanager) | GPL-3.0 | 仅借鉴其动态分段规划算法（IDM 规则），未复制代码 |
-| [Scrapling](https://github.com/D4Vinci/Scrapling) | BSD-3-Clause | 借鉴自适应元素定位思路，独立实现于 `core/adaptive.py` |
+| [Scrapling](https://github.com/D4Vinci/Scrapling) | BSD-3-Clause | 借鉴自适应定位、Spider 引擎与会话设计的思路，独立实现于 `core/adaptive.py`、`spiders/` |

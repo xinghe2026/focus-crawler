@@ -184,6 +184,25 @@ def relocate(
     return None, best_score
 
 
+def find_similar(
+    root: HtmlElement,
+    element: HtmlElement,
+    threshold: float = 70.0,
+    limit: int = 50,
+) -> list[tuple[HtmlElement, float]]:
+    """找出与给定元素相似的同级 / 同类元素（Scrapling 的 find_similar）。"""
+    original = fingerprint(element)
+    results: list[tuple[HtmlElement, float]] = []
+    for candidate in iter_elements(root, original.tag):
+        if candidate is element:
+            continue
+        current = score(original, fingerprint(candidate))
+        if current >= threshold:
+            results.append((candidate, current))
+    results.sort(key=lambda item: item[1], reverse=True)
+    return results[:limit]
+
+
 class AdaptiveStore:
     """指纹存取：优先走 SQLite（跨任务、跨进程生效）。"""
 
@@ -222,6 +241,7 @@ def domain_of(page_url: str) -> str:
 
 __all__ = [
     "AdaptiveStore",
+    "find_similar",
     "ElementFingerprint",
     "domain_of",
     "fingerprint",

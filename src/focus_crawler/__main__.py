@@ -104,6 +104,61 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_spider_class(target: str):
+    """从 ``path/to/module.py:ClassName`` 或 ``module:Class`` 载入 Spider 类。"""
+    import importlib.util
+
+    if ":" not in target:
+        raise ValueError("Spider 目标格式应为 文件路径.py:类名")
+    module_ref, class_name = target.rsplit(":", 1)
+    path = Path(module_ref)
+    if path.is_file():
+        spec = importlib.util.spec_from_file_location("focus_crawler_user_spider", path)
+        if spec is None or spec.loader is None:
+            raise ValueError(f"无法加载 Spider 文件：{path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    else:
+        import importlib
+
+        module = importlib.import_module(module_ref)
+    spider_class = getattr(module, class_name, None)
+    if spider_class is None:
+        raise ValueError(f"{module_ref} 中没有找到类 {class_name}")
+    return spider_class
+
+
+def cmd_spider(args: argparse.Namespace) -> int:
+    """运行一个 Spider 类并导出结果。"""
+    from .spiders import export_items
+
+    spider_class = _load_spider_class(args.target)
+    settings: dict = json.loads(args.settings) if args.settings else {}
+    if args.concurrency:
+        settings["concurrency"] = args.concurrency
+    if args.dev_mode:
+        settings["dev_mode"] = True
+    if args.robots:
+        settings["robots_txt_obey"] = True
+    spider = spider_class(settings=settings, crawldir=args.crawldir)
+    items = spider.start()
+    output = args.output or f"{spider.name or 'spider'}.json"
+    path = export_items(items, output, args.format)
+    print(
+        json.dumps(
+            {
+                "spider": getattr(spider, "name", "spider"),
+                "items": len(items),
+                "stats": spider.stats,
+                "output": str(path),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """环境自检：yt-dlp / ffmpeg / playwright 等可选依赖是否就绪。"""
     payload = {
@@ -140,6 +195,17 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--db", default=None)
     export.add_argument("--output", default=None, help="输出 xlsx 路径")
     export.set_defaults(func=cmd_export)
+
+    spider = sub.add_parser("spider", help="运行 Spider 类（类 Scrapy 的爬虫 API）")
+    spider.add_argument("target", help="Spider 目标，如 my_spider.py:MySpider")
+    spider.add_argument("--output", default=None, help="导出文件（默认 <name>.json）")
+    spider.add_argument("--format", default=None, help="json / jsonl / csv / xml")
+    spider.add_argument("--crawldir", default=None, help="断点目录（暂停 / 续跑）")
+    spider.add_argument("--settings", default=None, help="JSON 字符串，覆盖 SpiderSettings")
+    spider.add_argument("--concurrency", type=int, default=None)
+    spider.add_argument("--dev-mode", action="store_true", help="缓存响应到磁盘并重放")
+    spider.add_argument("--robots", action="store_true", help="遵守 robots.txt")
+    spider.set_defaults(func=cmd_spider)
 
     doctor = sub.add_parser("doctor", help="环境自检：yt-dlp / ffmpeg / playwright")
     doctor.add_argument("--ffmpeg", default=None, help="自定义 ffmpeg 可执行文件路径")
