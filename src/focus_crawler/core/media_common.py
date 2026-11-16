@@ -13,9 +13,14 @@ from parsel import Selector
 
 from ..config.schema import AudioConfig, ImageConfig, MediaFallbackConfig, VideoConfig
 from ..utils.hash import media_hash, normalize_url
+from ..utils.logging import get_logger
+from .errors import MediaDownloadError
 from .host_fallback import fallback_urls, is_dns_error, preferred_url
+from .segmented_downloader import download_file
 
 IMAGE_EXTS = {"jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "svg"}
+
+logger = get_logger("media_common")
 VIDEO_EXTS = {"mp4", "flv", "m3u8", "ts", "webm", "mkv", "mpd", "mov", "avi"}
 AUDIO_EXTS = {"mp3", "m4a", "aac", "flac", "wav", "ogg", "opus", "oga", "wma"}
 
@@ -36,12 +41,6 @@ _MIME_TO_EXT = {
     "audio/ogg": "ogg",
     "audio/opus": "opus",
 }
-
-
-class MediaDownloadError(RuntimeError):
-    def __init__(self, message: str, failure_type: str = "media_download_error"):
-        super().__init__(message)
-        self.failure_type = failure_type
 
 
 @dataclass
@@ -252,11 +251,65 @@ def download_direct(
     filename: str | None = None,
     headers: dict[str, str] | None = None,
     fallback: MediaFallbackConfig | None = None,
+    *,
+    connections: int = 4,
+    rate_limit: int = 0,
+    resume: bool = True,
+    segmented: bool = True,
+    should_stop: Callable[[], bool] | None = None,
+    on_progress: Callable[[int, int | None, float], None] | None = None,
 ) -> tuple[Path, int]:
-    """直链流式下载（一次读入内存），返回 (本地路径, 字节数)。
+    """直链下载，返回 (本地路径, 字节数)。
 
-    fallback 启用时：域名解析失败会切换配置中的镜像主机重试（路径保持不变）。
+    * 服务器支持 Range 时走分段并发下载（动态拆分 + 断点续传）；
+    * 不支持时回退单连接流式下载（不再整包读进内存）；
+    * ``fallback`` 启用时：域名解析失败会切换配置中的镜像主机重试，
+      其它错误（403 / 404 / 超时等）不换主机，直接抛出。
     """
+    folder = Path(dest_dir)
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / (filename or filename_for_url(url, guess_format(url)))
+    client = getattr(fetcher, "client", None)
+    if client is None:
+        # 兼容只实现 fetch() 的注入式 fetcher（测试 / 自定义传输）
+        return _fetch_once(fetcher, url, target, headers, fallback)
+
+    last_error: MediaDownloadError | None = None
+    for attempt_url in _direct_attempt_urls(fallback, url):
+        try:
+            report = download_file(
+                client,
+                attempt_url,
+                target,
+                headers=headers,
+                connections=connections if segmented else 1,
+                rate_limit=rate_limit,
+                resume=resume,
+                should_stop=should_stop,
+                on_progress=on_progress,
+            )
+            return report.path, report.size
+        except MediaDownloadError as exc:
+            last_error = exc
+            logger.debug("直链下载失败 %s：%s", attempt_url, exc)
+            # 仅域名解析失败才换镜像主机，其余错误不重试
+            if exc.failure_type != "connection_error" or not is_dns_message(str(exc)):
+                raise
+    if last_error is not None:
+        raise last_error
+    raise MediaDownloadError("下载失败", "media_download_error")
+
+
+def is_dns_message(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(
+        hint in lowered
+        for hint in ("getaddrinfo", "11001", "name or service not known", "nodename nor servname", "dns")
+    )
+
+
+def _fetch_once(fetcher, url: str, target: Path, headers: dict[str, str] | None, fallback) -> tuple[Path, int]:
+    """旧式一次性下载（fetcher 没有 .client 时使用）。"""
     result = None
     for attempt_url in _direct_attempt_urls(fallback, url):
         result = fetcher.fetch(attempt_url, headers=headers or None, want_bytes=True)
@@ -268,9 +321,6 @@ def download_direct(
         raise MediaDownloadError("下载失败", "media_download_error")
     if not result.ok or result.content is None:
         raise MediaDownloadError(result.error or "下载失败", result.failure_type or "media_download_error")
-    folder = Path(dest_dir)
-    folder.mkdir(parents=True, exist_ok=True)
-    target = folder / (filename or filename_for_url(url, guess_format(url)))
     target.write_bytes(result.content)
     return target, len(result.content)
 

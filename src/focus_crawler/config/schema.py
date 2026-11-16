@@ -292,6 +292,9 @@ class FieldSpec:
     source: str = "html"
     response_index: int = 0
     jsonpath: str | None = None
+    # 选择器失效时按元素指纹重新定位（页面改版自愈）
+    adaptive: bool = False
+    adaptive_threshold: int = 40
 
     @classmethod
     def from_dict(cls, name: str, raw: Any, errors: list[str], prefix: str) -> "FieldSpec":
@@ -343,6 +346,10 @@ class FieldSpec:
             transform=transform,
             default=data.get("default", ""),
             source=source,
+            adaptive=_read_bool(data.get("adaptive"), f"{prefix}.{name}.adaptive", errors, False),
+            adaptive_threshold=_read_int(
+                data.get("adaptive_threshold"), f"{prefix}.{name}.adaptive_threshold", errors, 40, 1
+            ),
             response_index=_read_int(
                 data.get("response_index"), f"{prefix}.{name}.response_index", errors, 0, 0
             ),

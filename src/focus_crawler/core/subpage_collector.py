@@ -15,6 +15,7 @@ from ..utils.hash import content_hash, media_hash, normalize_url, sha256_text
 from ..utils.logging import get_logger
 from ..utils.paths import media_dir
 from . import image_crawler
+from .adaptive import AdaptiveStore
 from .audio_adapter import AdapterContext, AdapterError, resolve_audio
 from .audio_downloader import download_audio
 from .audio_sniffer import sniff_static as sniff_audio
@@ -190,7 +191,12 @@ class SubpageCollector:
         if data is None:
             if not self.task.detail.fields:
                 return
-            parsed = parse_detail(html, url, self.task.detail)
+            parsed = parse_detail(
+                html,
+                url,
+                self.task.detail,
+                adaptive_store=AdaptiveStore(self.store, self.task_id),
+            )
             data = parsed.data
 
         self.store.add_item(self.task_id, url, data, content_hash(html))

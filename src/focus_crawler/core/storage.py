@@ -121,6 +121,18 @@ CREATE TABLE IF NOT EXISTS parser_runs (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS adaptive_fingerprints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  field_name TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  hits INTEGER NOT NULL DEFAULT 0,
+  relocations INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  UNIQUE(task_id, field_name, domain)
+);
+
 CREATE TABLE IF NOT EXISTS media_adapters (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id INTEGER NOT NULL,
@@ -216,7 +228,16 @@ class Storage:
             "DELETE FROM media_segments WHERE media_id IN (SELECT id FROM media WHERE task_id = ?)",
             (task_id,),
         )
-        for table in ("media", "urls", "items", "failures", "parser_runs", "media_adapters", "logs"):
+        for table in (
+            "media",
+            "urls",
+            "items",
+            "failures",
+            "parser_runs",
+            "media_adapters",
+            "adaptive_fingerprints",
+            "logs",
+        ):
             self.conn.execute(f"DELETE FROM {table} WHERE task_id = ?", (task_id,))
         self.conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         self.conn.commit()
@@ -339,6 +360,39 @@ class Storage:
         return int(
             self.conn.execute("SELECT COUNT(*) AS n FROM items WHERE task_id = ?", (task_id,)).fetchone()["n"]
         )
+
+    # ---------- 自适应选择器 ----------
+    def save_adaptive_fingerprint(self, task_id: int, field_name: str, domain: str, fingerprint: str) -> None:
+        """保存 / 更新字段的元素指纹（页面改版后据此重新定位）。"""
+        self.conn.execute(
+            """INSERT INTO adaptive_fingerprints (task_id, field_name, domain, fingerprint, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(task_id, field_name, domain)
+               DO UPDATE SET fingerprint = excluded.fingerprint,
+                             relocations = relocations + 1,
+                             updated_at = excluded.updated_at""",
+            (task_id, field_name, domain or "", fingerprint, now_iso()),
+        )
+        self.conn.commit()
+
+    def get_adaptive_fingerprint(self, task_id: int, field_name: str, domain: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT fingerprint FROM adaptive_fingerprints WHERE task_id = ? AND field_name = ? AND domain = ?",
+            (task_id, field_name, domain or ""),
+        ).fetchone()
+        return str(row["fingerprint"]) if row else None
+
+    def list_adaptive_fingerprints(self, task_id: int) -> list[sqlite3.Row]:
+        return list(
+            self.conn.execute(
+                "SELECT * FROM adaptive_fingerprints WHERE task_id = ? ORDER BY field_name",
+                (task_id,),
+            )
+        )
+
+    def clear_adaptive_fingerprints(self, task_id: int) -> None:
+        self.conn.execute("DELETE FROM adaptive_fingerprints WHERE task_id = ?", (task_id,))
+        self.conn.commit()
 
     # ---------- media ----------
     def add_media(self, record: MediaRecord) -> bool:

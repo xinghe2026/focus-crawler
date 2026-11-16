@@ -11,6 +11,7 @@ from ..utils.hash import content_hash
 from ..utils.logging import get_logger
 from . import link_discovery
 from .dynamic_sniffer import DynamicPage, DynamicSniffError, playwright_available, sniff_page
+from .adaptive import AdaptiveStore
 from .parser import parse_detail
 from .subpage_collector import SubpageCollector
 
@@ -206,6 +207,11 @@ class Scheduler:
             stats.failures += sub.errors
             return
         if self.task.detail.fields:
-            parsed = parse_detail(content, url, self.task.detail)
+            parsed = parse_detail(
+                content,
+                url,
+                self.task.detail,
+                adaptive_store=AdaptiveStore(self.store, self.task_id),
+            )
             self.store.add_item(self.task_id, url, parsed.data, content_hash(content))
             stats.items += 1

@@ -10,6 +10,7 @@ from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from ..utils.logging import setup_logging
+from . import theme
 from .main_window import MainWindow
 
 _UI_FONTS = ("Microsoft YaHei UI", "Microsoft YaHei", "SimSun")
@@ -41,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging()
     app = QApplication(argv if argv is not None else sys.argv)
     _apply_font(app)
+    theme.apply(app)
     app.setApplicationName("FocusCrawler")
     app.setOrganizationName("FocusCrawler")
     app.setApplicationDisplayName("FocusCrawler 配置驱动爬虫")

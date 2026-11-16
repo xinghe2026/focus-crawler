@@ -46,6 +46,9 @@
 | 命令行环境自检：`focus-crawler doctor` 检查 yt-dlp / ffmpeg / playwright | 完成 |
 | ffmpeg 自动探测：配置路径 → `%APPDATA%/FocusCrawler/tools` → PATH → Scoop / Chocolatey → imageio-ffmpeg → Playwright，探测 concat / mp4 能力，裁剪版自动改走二进制拼接 + 重封装 | 完成 |
 | 设置页显示 ffmpeg / yt-dlp 实际状态，支持「自动检测」一键填入 | 完成 |
+| 分段并发下载引擎（借鉴 Mister Download Manager / IDM 的动态分段规划）：多连接、动态拆分、断点续传、限速、暂停停止 | 完成 |
+| 自适应选择器（借鉴 Scrapling 的 adaptive relocation）：页面改版后按元素指纹重新定位字段并回写 | 完成 |
+| 终端风界面主题：深黑底 + 荧光绿 + 等宽字体 + HUD 状态条，覆盖主窗口 / 表格 / 对话框 / 滚动条 | 完成 |
 | PyInstaller `--onedir` 打包：`scripts/build.ps1`、GUI 入口、测试与 exe 冒烟自检 | 完成 |
 
 ## 安装
@@ -168,6 +171,45 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 > 合规提醒：yt-dlp 只下载「页面本身可访问」的原始文件；不提供 DRM 解密、
 > 会员内容绕过或签名逆向。请自行确认版权与站点条款。
 
+## 分段下载引擎
+
+直链媒体走 :mod:`focus_crawler.core.segmented_downloader`，规则参考 IDM 公开文档与
+Mister Download Manager（GPL-3.0，**仅借鉴算法，代码为独立实现**）：
+
+1. 先 ``Range: bytes=0-0`` 探测服务器是否支持分段与总大小；
+2. 支持则按连接数切分文件，空闲连接优先领取未分配段；
+3. 否则抢占「刚完成段的下一个、尚未开始接收」的段；
+4. 再否则把最大的剩余段对半拆开（每半不小于 ``min_split``）；
+5. 每段独立文件句柄按偏移写入，互不加锁；``.part`` + ``.fcdl`` 支持断点续传；
+6. 全局限速令牌桶、进度回调、暂停 / 停止；
+7. 服务器忽略 Range（返回 200）或文件小于 2 MiB 时自动回退单连接流式下载。
+
+## 自适应选择器
+
+字段解析默认按 CSS / XPath 取；开启 ``adaptive`` 后，选择器失效时按「元素指纹」
+（标签、文本、属性、DOM 路径、父节点特征）在页面上重新定位，并把新指纹回写 SQLite，
+下次继续可用。算法思路参考 Scrapling（BSD-3-Clause）的 relocate / similarity score。
+
+```json
+"detail": {
+  "fields": {
+    "title":  { "selector": "div.title-box > h1", "adaptive": true },
+    "author": { "selector": ".meta .author", "adaptive": true, "adaptive_threshold": 40 }
+  }
+}
+```
+
+任务编辑器「字段与解析」页的字段表最后一列即「自适应」勾选框；
+``focus-crawler doctor`` 之外，指纹保存在数据库 ``adaptive_fingerprints`` 表，可随时清空重学。
+
+## 界面主题
+
+``gui/theme.py`` 提供终端风 QSS（深黑 ``#040705`` + 荧光绿 ``#00FF41`` + 等宽字体），
+``gui/hud.py`` 是顶部自绘 HUD（品牌、运行状态灯、任务计数、时钟）。主题在
+``gui/app.py`` 启动时一次性应用，覆盖主窗口、表格、对话框、滚动条与进度条。
+
+主视觉由美术模型生成，见 ``docs/art/``。
+
 ## 架构约定
 
 - 第一层：纯 JSON 配置（选择器 / JSONPath），覆盖静态页面。
@@ -183,6 +225,8 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 - 动态媒体嗅探逐子页串行执行（并发 1）；未安装 playwright 时自动回退静态抓取。
 - yt-dlp 解析每个子页最多额外一次请求；`auto` 模式只在站点被 yt-dlp 支持时才触发。
 - yt-dlp 合流音视频时依赖 ffmpeg；程序会自动探测（含打包内置的 imageio-ffmpeg），都找不到时只能拿单一格式。
+- 分段下载依赖服务器支持 Range；不支持时自动回退单连接，速度受限于单连接带宽。
+- 自适应定位是「尽力而为」：页面结构大改（例如整站换框架）仍可能需要人工更新选择器。
 - 打包产物约 330MB（含 Playwright 与 imageio-ffmpeg）；不装这两个可选依赖可显著减小体积。
 
 ## 假设（信息不足时的默认决策）
@@ -192,3 +236,11 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 3. `urls.status` 使用 `pending / fetching / done / failed`；`page_type` 使用 `seed / discovered / list / detail`。
 4. 未提供 `ffmpeg`、`playwright` 的能力不阻塞基础流程，相关功能返回明确错误或跳过。
 5. GUI 与打包为独立里程碑，核心逻辑全部通过 CLI 与 pytest 验证后再接入。
+
+## 第三方致谢
+
+| 项目 | 许可 | 本项目如何使用 |
+| --- | --- | --- |
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Unlicense | 可选依赖，直接调用其解析 / 下载能力 |
+| [Mister Download Manager](https://github.com/anefzaoui/misterdownloadmanager) | GPL-3.0 | 仅借鉴其动态分段规划算法（IDM 规则），未复制代码 |
+| [Scrapling](https://github.com/D4Vinci/Scrapling) | BSD-3-Clause | 借鉴自适应元素定位思路，独立实现于 `core/adaptive.py` |

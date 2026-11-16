@@ -309,7 +309,7 @@ def detail_fields_raw(raw: dict) -> dict:
 class TaskEditorDialog(QDialog):
     """任务配置表单。保存前用 TaskConfig.from_dict 做完整校验。"""
 
-    FIELD_HEADERS = ["字段名", "选择器/XPath", "类型", "属性", "正则", "转换（逗号分隔）"]
+    FIELD_HEADERS = ["字段名", "选择器/XPath", "类型", "属性", "正则", "转换（逗号分隔）", "自适应"]
 
     def __init__(
         self,
@@ -552,7 +552,10 @@ class TaskEditorDialog(QDialog):
         buttons_row.addWidget(remove_button)
         buttons_row.addStretch(1)
         fields_layout.addLayout(buttons_row)
-        hint = QLabel("类型可选 text / html / attr / current_url / json；XPath 以 / 或 // 开头，JSONPath 以 $ 开头。")
+        hint = QLabel(
+            "类型可选 text / html / attr / current_url / json；XPath 以 / 或 // 开头，JSONPath 以 $ 开头。\n"
+            "勾选「自适应」后，页面改版导致选择器失效时，会按元素指纹重新定位该字段。"
+        )
         hint.setWordWrap(True)
         fields_layout.addWidget(hint)
         outer.addWidget(fields_group, 1)
@@ -845,6 +848,17 @@ class TaskEditorDialog(QDialog):
                 item = QTableWidgetItem(value)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.fields_table.setItem(row, column, item)
+            adaptive_item = QTableWidgetItem("")
+            adaptive_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsSelectable
+            )
+            adaptive_item.setCheckState(
+                Qt.CheckState.Checked if spec.get("adaptive") else Qt.CheckState.Unchecked
+            )
+            adaptive_item.setToolTip("页面改版、选择器失效时按元素指纹重新定位")
+            self.fields_table.setItem(row, 6, adaptive_item)
 
     # ---------- 收集 ----------
     def _cell(self, row: int, column: int) -> str:
@@ -881,6 +895,10 @@ class TaskEditorDialog(QDialog):
                 spec["regex"] = regex
             else:
                 spec.pop("regex", None)
+            adaptive_item = self.fields_table.item(row, 6)
+            spec["adaptive"] = bool(
+                adaptive_item is not None and adaptive_item.checkState() == Qt.CheckState.Checked
+            )
             transform = split_items(self._cell(row, 5))
             if transform:
                 spec["transform"] = transform

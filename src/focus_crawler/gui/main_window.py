@@ -42,8 +42,9 @@ from ..core.exporter import export_excel
 from ..core.image_crawler import filename_for_image
 from ..core.storage import Storage
 from ..utils.paths import media_dir, safe_task_name
-from . import settings
+from . import settings, theme
 from .dialogs import FailureDialog, PreviewDialog, SettingsDialog
+from .hud import StatusHud
 from .task_editor import TaskEditorDialog
 from .workers import MediaDownloadWorker, PreviewWorker, RunWorker
 
@@ -213,6 +214,7 @@ class MainWindow(QMainWindow):
         logging.getLogger("focus_crawler").addHandler(self._log_handler)
 
         self._build_ui()
+        self._polish_tables()
         self._timer = QTimer(self)
         self._timer.setInterval(self.POLL_INTERVAL_MS)
         self._timer.timeout.connect(self._poll_running_stats)
@@ -223,6 +225,11 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(6)
+
+        self.hud = StatusHud()
+        outer.addWidget(self.hud)
 
         task_bar = QHBoxLayout()
         self.new_button = QPushButton("新建任务")
@@ -670,6 +677,19 @@ class MainWindow(QMainWindow):
         if self.task_table.rowCount() and self.task_table.currentRow() < 0:
             self.task_table.selectRow(0)
         self._update_buttons()
+        self._refresh_hud()
+
+    def _refresh_hud(self) -> None:
+        """HUD：任务总数 + 正在运行的任务数 + 系统状态。"""
+        if not hasattr(self, "hud"):
+            return
+        total = self.task_table.rowCount()
+        running = 1 if self._running_task_id is not None else 0
+        self.hud.set_counts(total, running)
+        if running:
+            self.hud.set_status("EXTRACTING", theme.WARN)
+        else:
+            self.hud.set_status("SYSTEM ONLINE", theme.ACCENT)
 
     def _selected_task(self) -> tuple[int, dict] | None:
         row = self.task_table.currentRow()
@@ -1053,6 +1073,9 @@ class MainWindow(QMainWindow):
         payload = json.dumps(config.to_dict(), ensure_ascii=False, indent=2)
         task_id = self.store.upsert_task(config.task_name, payload)
         self._running_task_id = task_id
+        if hasattr(self, "hud"):
+            self.hud.set_status("EXTRACTING", theme.WARN)
+            self._refresh_hud()
 
         worker = RunWorker(
             config,
@@ -1081,6 +1104,10 @@ class MainWindow(QMainWindow):
         logger.info("开始运行任务：%s", config.task_name)
 
     def _on_run_done(self, summary: dict) -> None:
+        self._running_task_id = None
+        if hasattr(self, "hud"):
+            self.hud.set_status("SYSTEM ONLINE", theme.ACCENT)
+            self._refresh_hud()
         state = "已停止" if summary.get("stopped") else "已完成"
         message = (
             f"{state}：抓取 {summary.get('pages', 0)} 页，"
@@ -1091,6 +1118,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message)
 
     def _on_run_failed(self, message: str) -> None:
+        self._running_task_id = None
+        if hasattr(self, "hud"):
+            self.hud.set_status("FAULT", theme.DANGER)
+            self._refresh_hud()
         logger.error(message)
         QMessageBox.warning(self, "运行失败", message)
 
@@ -1122,6 +1153,14 @@ class MainWindow(QMainWindow):
         self.stop_button.setEnabled(False)
         self.statusBar().showMessage("正在停止…")
         logger.info("用户请求停止任务")
+
+    def _polish_tables(self) -> None:
+        """统一表格观感：交替行 + 紧凑行高 + 等宽数值对齐。"""
+        for table in self.findChildren(QTableWidget):
+            table.setAlternatingRowColors(True)
+            table.verticalHeader().setDefaultSectionSize(26)
+            table.horizontalHeader().setHighlightSections(False)
+            table.setShowGrid(True)
 
     def _poll_running_stats(self) -> None:
         if self._running_task_id is None:

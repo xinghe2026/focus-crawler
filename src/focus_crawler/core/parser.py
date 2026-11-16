@@ -11,9 +11,13 @@ from urllib.parse import urljoin
 from parsel import Selector, SelectorList
 
 from ..config.schema import DetailConfig, FieldSpec
+from ..utils.logging import get_logger
 from ..models.parse_context import XhrResponse
 from ..utils.jsonpath import JsonPathError, query
 from ..utils.text import clean_text, parse_date_text, to_float, to_int
+from . import adaptive as adaptive_mod
+
+logger = get_logger("parser")
 
 
 @dataclass
@@ -87,7 +91,54 @@ def _json_source(spec: FieldSpec, responses: list[XhrResponse]) -> Any:
     return payload
 
 
-def extract_field(html: str, page_url: str, spec: FieldSpec, responses: list[XhrResponse] | None = None) -> Any:
+def _value_from_node(node: Selector, spec: FieldSpec) -> Any:
+    if spec.type == "attr":
+        return node.attrib.get(spec.attribute or "src")
+    if spec.type == "html":
+        return node.get()
+    if spec.type == "json":
+        text = _node_text(node)
+        try:
+            return json.loads(text) if text else None
+        except json.JSONDecodeError:
+            return None
+    return _node_text(node)
+
+
+def _relocate(
+    html: str,
+    page_url: str,
+    spec: FieldSpec,
+    field_name: str,
+    adaptive_store: Any,
+) -> Selector | None:
+    """选择器失效时按元素指纹重新定位，并回写新指纹。"""
+    if adaptive_store is None or not spec.adaptive:
+        return None
+    domain = adaptive_mod.domain_of(page_url)
+    fingerprint = adaptive_store.load(field_name, domain)
+    if fingerprint is None:
+        return None
+    root = adaptive_mod.parse_html(html)
+    if root is None:
+        return None
+    element, matched = adaptive_mod.relocate(root, fingerprint, spec.adaptive_threshold)
+    if element is None:
+        logger.debug("自适应定位失败 %s（最高相似度 %.1f%%）", field_name, matched)
+        return None
+    adaptive_store.save(field_name, domain, element)
+    logger.info("自适应定位命中 %s（相似度 %.1f%%）", field_name, matched)
+    return Selector(root=element)
+
+
+def extract_field(
+    html: str,
+    page_url: str,
+    spec: FieldSpec,
+    responses: list[XhrResponse] | None = None,
+    adaptive_store: Any = None,
+    field_name: str = "",
+) -> Any:
     responses = responses or []
     value: Any = None
 
@@ -98,25 +149,16 @@ def extract_field(html: str, page_url: str, spec: FieldSpec, responses: list[Xhr
     else:
         root = Selector(text=html or "")
         expression = spec.selector or ""
+        node: Selector | None = None
         if expression:
             nodes = _select(root, expression)
             node = nodes[0] if len(nodes) else None
-        else:
-            node = None
-
+        if node is None:
+            node = _relocate(html, page_url, spec, field_name or expression, adaptive_store)
         if node is not None:
-            if spec.type == "attr":
-                value = node.attrib.get(spec.attribute or "src")
-            elif spec.type == "html":
-                value = node.get()
-            elif spec.type == "json":
-                text = _node_text(node)
-                try:
-                    value = json.loads(text) if text else None
-                except json.JSONDecodeError:
-                    value = None
-            else:
-                value = _node_text(node)
+            value = _value_from_node(node, spec)
+            if adaptive_store is not None and spec.adaptive and not expression:
+                adaptive_store.save(field_name, adaptive_mod.domain_of(page_url), node.root)
 
         if spec.regex:
             text = value if isinstance(value, str) else (html or "")
@@ -145,10 +187,25 @@ def parse_detail(
     page_url: str,
     detail: DetailConfig,
     responses: list[XhrResponse] | None = None,
+    adaptive_store: Any = None,
+    remember: bool = True,
 ) -> ParsedPage:
+    """解析详情页字段。
+
+    ``adaptive_store`` 非空且字段开启 ``adaptive`` 时：选择器命中后保存元素指纹，
+    选择器失效时按指纹重新定位（页面改版自愈）。
+    """
     result = ParsedPage()
+    root_selector: Selector | None = None
     for name, spec in detail.fields.items():
-        value = extract_field(html, page_url, spec, responses)
+        value = extract_field(html, page_url, spec, responses, adaptive_store, name)
+        if remember and adaptive_store is not None and spec.adaptive and value:
+            # 记录"当前正确的元素"指纹，供以后页面改版时重新定位
+            root_selector = root_selector or Selector(text=html or "")
+            if spec.selector:
+                nodes = _select(root_selector, spec.selector)
+                if nodes:
+                    adaptive_store.save(name, adaptive_mod.domain_of(page_url), nodes[0].root)
         result.data[name] = value
         if isinstance(value, str):
             result.hits[name] = bool(value.strip())
