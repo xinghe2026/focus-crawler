@@ -407,3 +407,32 @@ def test_spider_cli_rejects_bad_target(tmp_path):
 
     with pytest.raises(ValueError):
         main(["spider", "not-a-file.py", "--output", str(tmp_path / "x.json")])
+
+
+def test_spider_can_customize_blocked_detection():
+    """阻塞判定可自定义：默认 200 也能量到"soft block"，并触发重试。"""
+    attempts = {"n": 0}
+
+    class Demo(Spider):
+        start_urls = ["https://site.test/"]
+
+        def is_blocked(self, response):
+            return "登录后查看" in response.text
+
+        async def parse(self, response):
+            yield Item(ok=True)
+
+    class Sessions(FakeSessions):
+        async def fetch(self, request):
+            attempts["n"] += 1
+            body = "登录后查看" if attempts["n"] == 1 else "<h1>ok</h1>"
+            return Response(url=request.url, status=200, headers={}, content=body.encode(), request=request)
+
+    spider = Demo(settings={"retries": 2, "delay": 0})
+    async def collect():
+        return [item async for item in spider.stream(Sessions())]
+
+    items = run(collect())
+    assert attempts["n"] >= 2
+    assert spider.stats["blocked"] >= 1
+    assert items

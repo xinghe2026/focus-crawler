@@ -374,9 +374,12 @@ class CrawlerEngine:
             return self._retry_or_fail(request, str(exc))
 
         latency = time.monotonic() - started
-        blocked = self.throttle.report(
-            domain, response.status, latency, response.headers, response.text[:2000] if response.status >= 400 else ""
+        # 先让节流器记录本次响应（它自己也会按状态码/特征判断并调整延迟）
+        throttle_blocked = self.throttle.report(
+            domain, response.status, latency, response.headers, response.text[:2000]
         )
+        custom_check = getattr(self.spider, "is_blocked", None)
+        blocked = bool(custom_check(response)) if callable(custom_check) else throttle_blocked
         if blocked:
             self.stats.blocked += 1
             logger.warning("检测到限速/封禁 %s（HTTP %s），已自动放慢", request.url, response.status)

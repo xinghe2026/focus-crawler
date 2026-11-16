@@ -130,3 +130,26 @@ def test_session_settings_from_dict_ignores_unknown_keys():
     settings = SessionSettings.from_dict({"kind": "browser", "nope": 1, "timeout": 5})
     assert settings.kind == "browser"
     assert settings.timeout == 5
+
+
+def test_doh_rewrites_host_and_keeps_original_host_header(monkeypatch):
+    """开启 DoH 后请求发往解析出的 IP，但 Host 头保持原域名。"""
+    from focus_crawler.spiders.sessions import DoHResolver
+
+    async def fake_resolve(self, host):
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(DoHResolver, "resolve", fake_resolve)
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["host"] = request.headers.get("host")
+        return httpx.Response(200, text="ok")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    session = HttpSession(SessionSettings(dns_over_https=True), client=client)
+    response = run(session.fetch(Request(url="https://example.test/page")))
+    assert response.status == 200
+    assert "93.184.216.34" in seen["url"]
+    assert seen["host"] == "example.test"

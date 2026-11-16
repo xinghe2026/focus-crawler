@@ -250,6 +250,19 @@ class Blog(CrawlSpider):
   restrict_css / restrict_xpaths、deny_extensions、URL 规范化与去重；
 * 导出：`export_items(items, path, "json"|"jsonl"|"csv"|"xml")`。
 
+### 与 Scrapling 的能力差异（诚实清单）
+
+| 项 | 本项目 | 说明 |
+| --- | --- | --- |
+| HTTP/3 | ❌ 未支持 | httpx 不支持 h3；需要时改用 curl_cffi 的 HTTP/2 或换传输层 |
+| TLS 指纹 | ⚠️ 可选 | `SessionSettings(impersonate="chrome")`，需 `pip install curl_cffi` |
+| Cloudflare Turnstile | ⚠️ 基础反检测 | 关闭自动化特征 + 自定义 UA/locale/viewport/CDP，不保证通过 Turnstile |
+| 广告域名库 | ⚠️ 精简 24 条 | `block_ads=True` 生效；可按项目需求扩充 `AD_DOMAINS` |
+| 异步会话 API | ✅ | 引擎全程 async；HTTP 会话 httpx/curl_cffi 异步实现 |
+| 代理轮换 | ✅ | round_robin / random，支持按会话配置 |
+| DoH | ✅ | 解析后用 IP + Host + SNI 扩展请求，避免本地 DNS 泄漏 |
+| 网络捕获 | ✅ | 浏览器会话 `record_requests=True`，`search_network()` 有界检索 |
+
 ## 分段下载引擎
 
 直链媒体走 :mod:`focus_crawler.core.segmented_downloader`，规则参考 IDM 公开文档与

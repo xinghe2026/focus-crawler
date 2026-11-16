@@ -60,6 +60,12 @@ class Spider:
     def on_error(self, request: Request, error: Exception) -> None:
         logger.warning("请求失败 %s：%s", request.url, error)
 
+    def is_blocked(self, response: Response) -> bool:
+        """阻塞判定钩子：默认按状态码 + 页面特征词，可覆盖自定义。"""
+        from .throttle import looks_blocked
+
+        return looks_blocked(response.status, response.text[:2000])
+
     def process_item(self, item: Any) -> Any:
         """Item 流水线钩子：默认原样返回，返回 None 表示丢弃。"""
         return item

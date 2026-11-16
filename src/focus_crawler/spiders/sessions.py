@@ -188,6 +188,22 @@ class HttpSession:
         self._curl = False
         return self._client
 
+    async def _apply_doh(self, url: str, headers: dict[str, str]) -> tuple[str, dict[str, str], str | None]:
+        """把域名换成 DoH 解析出的 IP，并用 Host 头 + SNI 扩展保持证书校验。"""
+        if self._doh is None:
+            return url, headers, None
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        if not host:
+            return url, headers, None
+        ips = await self._doh.resolve(host)
+        if not ips:
+            return url, headers, None
+        netloc = ips[0] + (f":{parts.port}" if parts.port else "")
+        rewritten = urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+        merged = {**headers, "Host": host}
+        return rewritten, merged, host
+
     async def fetch(self, request: Request) -> Response:
         blocked = self.settings.blocked_hosts()
         if blocked and host_blocked(request.url, blocked):
@@ -199,20 +215,29 @@ class HttpSession:
                 request=request,
             )
         headers = {**self.settings.headers, **request.headers}
+        target_url, headers, sni_host = await self._apply_doh(request.url, headers)
+        extensions = {"sni_hostname": sni_host} if sni_host else None
         started = time.perf_counter()
         client = await self._ensure_client()
         try:
             if self._curl:
                 result = await client.request(
-                    request.method, request.url, headers=headers, data=request.body
+                    request.method, target_url, headers=headers, data=request.body
                 )
                 content = result.content
                 status = result.status_code
                 resp_headers = dict(result.headers)
             else:
-                result = await client.request(
-                    request.method, request.url, headers=headers, content=request.body
-                )
+                kwargs: dict[str, Any] = {"headers": headers, "content": request.body}
+                if extensions:
+                    kwargs["extensions"] = extensions
+                try:
+                    result = await client.request(request.method, target_url, **kwargs)
+                except TypeError:
+                    # 老版本 httpx 不支持 extensions：退回普通请求（仍带 Host 头）
+                    result = await client.request(
+                        request.method, target_url, headers=headers, content=request.body
+                    )
                 content = result.content
                 status = result.status_code
                 resp_headers = {str(k): str(v) for k, v in result.headers.items()}
