@@ -208,3 +208,72 @@ def test_cleanup_partial(tmp_path):
 def test_supports_segmented_download():
     assert seg.supports_segmented_download("https://cdn.test/a.mp4") is True
     assert seg.supports_segmented_download("ftp://cdn.test/a.mp4") is False
+
+
+def test_download_direct_sends_default_user_agent(tmp_path):
+    """回归：分段下载必须带 Fetcher 的默认 UA，否则 CDN 直接 403。"""
+    from focus_crawler.core.fetcher import Fetcher
+    from focus_crawler.core.media_common import download_direct
+
+    seen: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append({k.lower(): v for k, v in request.headers.items()})
+        if not request.headers.get("user-agent", "").startswith("Mozilla"):
+            return httpx.Response(403, text="forbidden")
+        payload = b"hello-media"
+        range_header = request.headers.get("range", "")
+        if range_header.startswith("bytes="):
+            spec = range_header.split("=", 1)[1]
+            start_text, _, end_text = spec.partition("-")
+            start = int(start_text or 0)
+            end = int(end_text) if end_text else len(payload) - 1
+            chunk = payload[start : end + 1]
+            return httpx.Response(
+                206,
+                headers={"content-range": f"bytes {start}-{end}/{len(payload)}"},
+                content=chunk,
+            )
+        return httpx.Response(200, headers={"content-length": str(len(payload))}, content=payload)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    fetcher = Fetcher(
+        timeout_ms=5000,
+        retry=0,
+        delay_ms=(0, 0),
+        respect_robots=False,
+        client=client,
+        sleep=lambda _s: None,
+        random_uniform=lambda low, high: low,
+    )
+    path, size = download_direct(fetcher, "https://cdn.test/a.bin", tmp_path)
+    assert size == len(b"hello-media")
+    assert path.read_bytes() == b"hello-media"
+    assert seen and all(h["user-agent"].startswith("Mozilla") for h in seen)
+
+
+def test_download_direct_retries_without_range_on_403(tmp_path):
+    """Range 请求被 403 时，退回普通整包 GET 再试一次。"""
+    from focus_crawler.core.fetcher import Fetcher
+    from focus_crawler.core.media_common import download_direct
+
+    payload = b"range-blocked-payload" * (1024 * 1024 // 20)  # ≈3 MiB，会触发分段
+    calls = {"range": 0, "plain": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "range" in {k.lower() for k in request.headers}:
+            calls["range"] += 1
+            return httpx.Response(403, text="no range")
+        calls["plain"] += 1
+        return httpx.Response(200, headers={"content-length": str(len(payload))}, content=payload)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    fetcher = Fetcher(
+        timeout_ms=5000, retry=0, delay_ms=(0, 0), respect_robots=False,
+        client=client, sleep=lambda _s: None, random_uniform=lambda low, high: low,
+    )
+    path, size = download_direct(fetcher, "https://cdn.test/b.bin", tmp_path)
+    assert path.read_bytes() == payload
+    assert size == len(payload)
+    assert calls["range"] >= 1
+    assert calls["plain"] >= 1

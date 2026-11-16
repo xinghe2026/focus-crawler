@@ -274,6 +274,11 @@ def download_direct(
         # 兼容只实现 fetch() 的注入式 fetcher（测试 / 自定义传输）
         return _fetch_once(fetcher, url, target, headers, fallback)
 
+    # 关键：合并 Fetcher 的默认请求头（UA / Accept-Language）。
+    # 直连 CDN 时缺 UA 会被大量站点判为爬虫直接 403。
+    merged_headers: dict[str, str] = dict(getattr(fetcher, "headers", None) or {})
+    merged_headers.update({str(k): str(v) for k, v in (headers or {}).items() if v})
+
     last_error: MediaDownloadError | None = None
     for attempt_url in _direct_attempt_urls(fallback, url):
         try:
@@ -281,7 +286,7 @@ def download_direct(
                 client,
                 attempt_url,
                 target,
-                headers=headers,
+                headers=merged_headers,
                 connections=connections if segmented else 1,
                 rate_limit=rate_limit,
                 resume=resume,
@@ -292,6 +297,23 @@ def download_direct(
         except MediaDownloadError as exc:
             last_error = exc
             logger.debug("直链下载失败 %s：%s", attempt_url, exc)
+            if exc.failure_type == "http_403":
+                # 有些 CDN 对 Range / 分段请求返回 403，但允许普通整包 GET，再试一次
+                try:
+                    report = download_file(
+                        client,
+                        attempt_url,
+                        target,
+                        headers=merged_headers,
+                        connections=1,
+                        segmented=False,
+                        resume=False,
+                        should_stop=should_stop,
+                        on_progress=on_progress,
+                    )
+                    return report.path, report.size
+                except MediaDownloadError as retry_error:
+                    last_error = retry_error
             # 仅域名解析失败才换镜像主机，其余错误不重试
             if exc.failure_type != "connection_error" or not is_dns_message(str(exc)):
                 raise

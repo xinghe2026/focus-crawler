@@ -11,5 +11,6 @@ exports/
 snapshots/
 build/
 dist/
+dist-next/
 *.spec
 .smoke-home/

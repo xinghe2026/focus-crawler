@@ -20,6 +20,7 @@ from .audio_adapter import AdapterContext, AdapterError, resolve_audio
 from .audio_downloader import download_audio
 from .audio_sniffer import sniff_static as sniff_audio
 from .hotlink import resolve_headers
+from .media_refresh import refresh_audio
 from .media_common import (
     MediaCandidate,
     MediaDownloadError,
@@ -378,15 +379,28 @@ class SubpageCollector:
                     page_url=media_origin_url(row) or row["source_url"],
                 )
             else:
+                # 音频直链带签名，跑久了会过期（403）：下载前按来源页重新解析一次
+                media_url = row["media_url"]
+                media_request_headers = headers
+                fresh = refresh_audio(self.task, row, self.fetcher)
+                if fresh is not None:
+                    media_url = fresh.url
+                    media_request_headers = resolve_headers(
+                        self.task.hotlink,
+                        media_url,
+                        row["source_url"],
+                        fresh.extra.get("headers"),
+                    )
+                    self.store.update_media_source(media_id, media_url)
                 path, size = download_audio(
                     self.fetcher,
-                    row["media_url"],
+                    media_url,
                     target,
                     config=self.task.audio,
                     store=self.store,
                     media_id=media_id,
                     ffmpeg_path=self.ffmpeg_path,
-                    headers=headers,
+                    headers=media_request_headers,
                     source_kind=media_source_kind(row),
                     page_url=media_origin_url(row) or row["source_url"],
                 )

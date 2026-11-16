@@ -125,3 +125,67 @@ def test_refresh_audio_returns_none_on_api_error():
         assert refresh_audio(_task(), _row(), fetcher) is None
     finally:
         fetcher.close()
+
+
+def test_collector_refreshes_signed_audio_before_download(tmp_path, monkeypatch):
+    """自动下载音频前必须刷新 B 站签名地址，否则旧地址会 403。"""
+    from focus_crawler.core import subpage_collector as sc
+    from focus_crawler.core.media_common import MediaCandidate
+    from focus_crawler.core.storage import Storage
+    from focus_crawler.models.media import MediaRecord
+    from focus_crawler.utils.hash import media_hash
+
+    store = Storage(tmp_path / "t.db")
+    task = TaskConfig.from_dict(
+        {
+            "task_name": "t",
+            "start_urls": ["https://www.bilibili.com/video/BV1xx411c7mD"],
+            "allowed_domains": ["bilibili.com"],
+            "audio": {"enabled": True, "adapter": {"bilibili": True}},
+            "video": {"enabled": False},
+            "image": {"enabled": False},
+        }
+    )
+    task_id = store.upsert_task(task.task_name, "{}")
+    store.add_media(
+        MediaRecord(
+            task_id=task_id,
+            source_url="https://www.bilibili.com/video/BV1xx411c7mD",
+            parent_url=None,
+            media_url="https://cdn.test/old-signed.m4s",
+            media_hash=media_hash("https://cdn.test/old-signed.m4s"),
+            media_type="audio",
+            format="m4s",
+            bitrate=192000,
+            source_kind="adapter:bilibili",
+        )
+    )
+    row = store.list_media(task_id)[0]
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        sc,
+        "refresh_audio",
+        lambda task, row, fetcher: MediaCandidate(
+            url="https://cdn.test/fresh-signed.m4s",
+            kind="audio",
+            format="m4s",
+            extra={"headers": {"Referer": "https://www.bilibili.com/"}},
+        ),
+    )
+
+    def fake_download_audio(fetcher, url, target, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        path = tmp_path / "a.m4s"
+        path.write_bytes(b"x")
+        return path, 1
+
+    monkeypatch.setattr(sc, "download_audio", fake_download_audio)
+    collector = sc.SubpageCollector(task=task, store=store, task_id=task_id, fetcher=object())
+    collector._download_media(row, "audio", sc.SubpageStats())
+
+    assert captured["url"] == "https://cdn.test/fresh-signed.m4s"
+    assert captured["headers"]["Referer"] == "https://www.bilibili.com/"
+    assert store.get_media_by_id(int(row["id"]))["media_url"] == "https://cdn.test/fresh-signed.m4s"
+    store.close()
