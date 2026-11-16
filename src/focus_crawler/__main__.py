@@ -104,35 +104,13 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0
 
 
-def _load_spider_class(target: str):
-    """从 ``path/to/module.py:ClassName`` 或 ``module:Class`` 载入 Spider 类。"""
-    import importlib.util
-
-    if ":" not in target:
-        raise ValueError("Spider 目标格式应为 文件路径.py:类名")
-    module_ref, class_name = target.rsplit(":", 1)
-    path = Path(module_ref)
-    if path.is_file():
-        spec = importlib.util.spec_from_file_location("focus_crawler_user_spider", path)
-        if spec is None or spec.loader is None:
-            raise ValueError(f"无法加载 Spider 文件：{path}")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-    else:
-        import importlib
-
-        module = importlib.import_module(module_ref)
-    spider_class = getattr(module, class_name, None)
-    if spider_class is None:
-        raise ValueError(f"{module_ref} 中没有找到类 {class_name}")
-    return spider_class
-
-
 def cmd_spider(args: argparse.Namespace) -> int:
     """运行一个 Spider 类并导出结果。"""
     from .spiders import export_items
 
-    spider_class = _load_spider_class(args.target)
+    from .spiders.loader import load_spider_class
+
+    spider_class = load_spider_class(args.target)
     settings: dict = json.loads(args.settings) if args.settings else {}
     if args.concurrency:
         settings["concurrency"] = args.concurrency

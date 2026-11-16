@@ -26,7 +26,7 @@ from ..utils.logging import get_logger
 from .cache import ResponseCache
 from .request import Request, Response
 from .sessions import SessionError, SessionManager, SessionSettings
-from .throttle import AutoThrottle, crawl_delay_from_robots, request_rate_from_robots
+from .throttle import AutoThrottle, RateLimiter, crawl_delay_from_robots, request_rate_from_robots
 
 logger = get_logger("spider.engine")
 
@@ -46,6 +46,7 @@ class SpiderSettings:
     )
     robots_txt_obey: bool = False
     autothrottle: bool = True
+    requests_per_second: float = 0.0   # 每域 QPS 上限，0 = 不限
     dev_mode: bool = False
     crawldir: str | None = None
     resume: bool = True
@@ -152,6 +153,7 @@ class CrawlerEngine:
         self.throttle = AutoThrottle(
             base_delay=self.settings.delay, max_delay=self.settings.max_delay
         )
+        self.limiter = RateLimiter(self.settings.requests_per_second)
         self.stats = CrawlStats()
         self.crawldir = Path(crawldir or self.settings.crawldir or spider.crawldir or "") if (
             crawldir or self.settings.crawldir or getattr(spider, "crawldir", "")
@@ -365,6 +367,7 @@ class CrawlerEngine:
             self.stats.cache_hits += 1
             return await self._dispatch(request, cached)
 
+        await self.limiter.acquire(domain)
         self.throttle.mark_request(domain)
         started = time.monotonic()
         self.stats.requests += 1
@@ -372,6 +375,8 @@ class CrawlerEngine:
             response = await self.sessions.fetch(request)
         except SessionError as exc:
             return self._retry_or_fail(request, str(exc))
+        except Exception as exc:  # noqa: BLE001 - 任意会话异常都要走重试/errback
+            return self._retry_or_fail(request, f"{type(exc).__name__}: {exc}")
 
         latency = time.monotonic() - started
         # 先让节流器记录本次响应（它自己也会按状态码/特征判断并调整延迟）
@@ -396,11 +401,29 @@ class CrawlerEngine:
         if request.retries >= self.settings.retries:
             self.stats.failed += 1
             logger.warning("放弃请求 %s：%s", request.url, reason)
+            self._run_errback(request, reason)
             return []
         self.stats.retries += 1
         retry = request.replace(retries=request.retries + 1, dont_filter=True)
         self.push(retry)
         return []
+
+    def _run_errback(self, request: Request, reason: str) -> None:
+        """失败回调：Request.errback 优先，其次 Spider.errback，最后 on_error。"""
+        handler = None
+        if request.errback:
+            handler = getattr(self.spider, request.errback, None)
+        if handler is None:
+            handler = getattr(self.spider, "errback", None)
+        try:
+            if callable(handler):
+                handler(request, Exception(reason))
+            else:
+                on_error = getattr(self.spider, "on_error", None)
+                if callable(on_error):
+                    on_error(request, Exception(reason))
+        except Exception as exc:  # noqa: BLE001 - 回调异常不能影响调度
+            logger.warning("errback 执行失败 %s：%s", request.url, exc)
 
     async def _dispatch(self, request: Request, response: Response) -> list[Any]:
         callback_name = request.callback or getattr(self.spider, "parse", None)

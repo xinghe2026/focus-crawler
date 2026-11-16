@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSplitter,
+    QStackedLayout,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -45,6 +46,8 @@ from ..utils.paths import media_dir, safe_task_name
 from . import settings, theme
 from .dialogs import FailureDialog, PreviewDialog, SettingsDialog
 from .hud import StatusHud
+from .rain import MatrixRain
+from .spider_page import SpiderPage
 from .task_editor import TaskEditorDialog
 from .workers import MediaDownloadWorker, PreviewWorker, RunWorker
 
@@ -222,9 +225,21 @@ class MainWindow(QMainWindow):
 
     # ---------- UI ----------
     def _build_ui(self) -> None:
+        # 背景层：数字雨；内容层透明，让雨透出来
         central = QWidget()
         self.setCentralWidget(central)
-        outer = QVBoxLayout(central)
+        stack = QStackedLayout(central)
+        stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        self.rain = MatrixRain(central)
+        stack.addWidget(self.rain)
+
+        content = QWidget()
+        content.setObjectName("contentRoot")
+        content.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        stack.addWidget(content)
+        stack.setCurrentWidget(content)  # StackAll 下 current 决定 z 序
+
+        outer = QVBoxLayout(content)
         outer.setContentsMargins(6, 6, 6, 6)
         outer.setSpacing(6)
 
@@ -312,6 +327,8 @@ class MainWindow(QMainWindow):
 
     def _build_tabs(self) -> QTabWidget:
         self.tabs = QTabWidget()
+        self.spider_page = SpiderPage()
+        self.tabs.addTab(self.spider_page, "Spider")
 
         monitor = QWidget()
         monitor_layout = QVBoxLayout(monitor)
@@ -2020,6 +2037,8 @@ class MainWindow(QMainWindow):
         self.log_view.appendPlainText(message)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt 接口命名
+        if hasattr(self, "spider_page"):
+            self.spider_page.shutdown()
         logging.getLogger("focus_crawler").removeHandler(self._log_handler)
         if self._run_worker is not None:
             self._run_worker.stop()

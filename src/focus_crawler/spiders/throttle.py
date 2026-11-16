@@ -92,6 +92,34 @@ class DomainState:
             self.delay = min(self.max_delay, max(self.delay * 2, self.base_delay * 2))
 
 
+class RateLimiter:
+    """每域 QPS 令牌桶（requests_per_second <= 0 表示不限）。"""
+
+    def __init__(self, requests_per_second: float = 0.0):
+        self.rate = max(0.0, float(requests_per_second))
+        self._tokens: dict[str, float] = {}
+        self._last: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    async def acquire(self, domain: str) -> None:
+        if self.rate <= 0:
+            return
+        import asyncio
+
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                last = self._last.get(domain, now)
+                tokens = min(1.0, self._tokens.get(domain, 1.0) + (now - last) * self.rate)
+                self._last[domain] = now
+                if tokens >= 1.0:
+                    self._tokens[domain] = tokens - 1.0
+                    return
+                self._tokens[domain] = tokens
+                wait = (1.0 - tokens) / self.rate
+            await asyncio.sleep(min(wait, 1.0))
+
+
 class AutoThrottle:
     """按域名的节流器（线程安全）。"""
 
@@ -196,6 +224,7 @@ def request_rate_from_robots(text: str) -> float | None:
 
 __all__ = [
     "AutoThrottle",
+    "RateLimiter",
     "crawl_delay_from_robots",
     "looks_blocked",
     "parse_retry_after",

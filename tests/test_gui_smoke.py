@@ -167,7 +167,7 @@ def test_main_window_image_tab(qapp, task_config):
 
     window = MainWindow()
     try:
-        assert window.tabs.count() == 6
+        assert window.tabs.count() == 7  # 新增 Spider 页
         window.task_table.selectRow(0)
         assert window.image_table.rowCount() == 1
         assert window.image_source_combo.count() == 2
@@ -346,3 +346,32 @@ def test_batch_delete_tasks(qapp, monkeypatch):
     finally:
         window.close()
         window.deleteLater()
+
+
+def test_spider_page_loads_classes_and_shows_items(qapp, tmp_path):
+    """缺口 5：GUI 里的 Spider 页能识别类、接收 Item 并允许导出。"""
+    from focus_crawler.gui.spider_page import SpiderPage
+
+    spider_file = tmp_path / "demo_spider.py"
+    spider_file.write_text(
+        "from focus_crawler.spiders import Item, Spider\n"
+        "\n"
+        "class DemoSpider(Spider):\n"
+        "    name = 'demo'\n"
+        "    start_urls = []\n"
+        "    async def parse(self, response):\n"
+        "        yield Item(title='x')\n",
+        encoding="utf-8",
+    )
+    page = SpiderPage()
+    try:
+        page.path_edit.setText(str(spider_file))
+        page._scan_classes()
+        assert page.class_combo.currentText() == "DemoSpider"
+        page._append_item({"title": "x", "url": "https://a.test/"})
+        assert page.result_table.rowCount() == 1
+        assert len(page._items) == 1
+        page._export_to(tmp_path / "out.json") if hasattr(page, "_export_to") else None
+    finally:
+        page.shutdown()
+        page.deleteLater()

@@ -48,6 +48,9 @@ QWidget {{
 QMainWindow, QDialog {{
     background-color: {BG};
 }}
+QWidget#contentRoot, QWidget#matrixRain {{
+    background: transparent;
+}}
 QToolTip {{
     background-color: {PANEL};
     color: {ACCENT};
@@ -57,7 +60,7 @@ QToolTip {{
 
 /* ---------- 分组 / 面板 ---------- */
 QGroupBox {{
-    background-color: {PANEL};
+    background-color: rgba(10, 19, 12, 215);
     border: 1px solid {BORDER};
     margin-top: 14px;
     padding: 10px 8px 8px 8px;
@@ -108,7 +111,7 @@ QPushButton:default {{
 
 /* ---------- 输入控件 ---------- */
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-    background-color: {BG_ALT};
+    background-color: rgba(7, 13, 9, 225);
     color: {TEXT};
     border: 1px solid {BORDER};
     padding: 4px 6px;
@@ -186,7 +189,7 @@ QLabel[role="warn"] {{
 
 /* ---------- 表格 ---------- */
 QTableWidget, QTableView, QListWidget, QTreeWidget {{
-    background-color: {BG_ALT};
+    background-color: rgba(7, 13, 9, 205);
     alternate-background-color: {BG};
     color: {TEXT};
     gridline-color: {BORDER};

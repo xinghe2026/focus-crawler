@@ -19,6 +19,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from ..utils.logging import get_logger
+from .cookies import load_netscape, save_netscape
 from .request import Request, Response
 
 logger = get_logger("spider.sessions")
@@ -79,36 +80,20 @@ class DoHResolver:
 
 
 # ---------------------------------------------------------------- 广告 / 域名拦截
-AD_DOMAINS = (
-    "doubleclick.net",
-    "googlesyndication.com",
-    "googleadservices.com",
-    "google-analytics.com",
-    "googletagmanager.com",
-    "adservice.google.com",
-    "amazon-adsystem.com",
-    "adsrvr.org",
-    "criteo.com",
-    "criteo.net",
-    "facebook.net",
-    "hotjar.com",
-    "scorecardresearch.com",
-    "taboola.com",
-    "outbrain.com",
-    "quantserve.com",
-    "adnxs.com",
-    "pubmatic.com",
-    "rubiconproject.com",
-    "openx.net",
-    "moatads.com",
-    "yieldmo.com",
-    "segment.io",
-    "mixpanel.com",
-)
+from ..third_party.ad_domains import AD_DOMAINS as _FULL_AD_DOMAINS
+
+#: 完整广告/追踪域名库（Scrapling 同源，Peter Lowe's list，约 3500 条）
+AD_DOMAINS = frozenset(_FULL_AD_DOMAINS)
 
 
-def host_blocked(url: str, blocked: Iterable[str]) -> bool:
+def host_blocked(url: str, blocked: Iterable[str] | frozenset) -> bool:
+    """按后缀匹配拦截域名（支持 3500+ 条广告库的高频查询）。"""
     host = (urlsplit(url).hostname or "").lower()
+    if not host or not blocked:
+        return False
+    if isinstance(blocked, frozenset):
+        parts = host.split(".")
+        return any(".".join(parts[index:]) in blocked for index in range(len(parts)))
     return any(host == item or host.endswith("." + item) for item in blocked if item)
 
 
@@ -130,6 +115,9 @@ class SessionSettings:
     block_domains: list[str] = field(default_factory=list)
     block_ads: bool = False
     dns_over_https: bool = False
+    http2: bool = False
+    http3: bool = False
+    save_cookies: bool = True
     record_requests: bool = False
     max_recorded: int = 200
     stealth: bool = True
@@ -174,6 +162,7 @@ class HttpSession:
                     impersonate=self.settings.impersonate,
                     timeout=self.settings.timeout,
                     proxies={"http": proxy, "https": proxy} if proxy else None,
+                    http3=self.settings.http3,
                 )
                 self._curl = True
                 return self._client
@@ -184,7 +173,13 @@ class HttpSession:
             timeout=self.settings.timeout,
             verify=self.settings.verify,
             proxy=proxy,
+            http2=self.settings.http2,
         )
+        if self.settings.cookies_file:
+            try:
+                load_netscape(self.settings.cookies_file, self._client.cookies)
+            except Exception as exc:  # noqa: BLE001 - cookie 文件坏了不影响抓取
+                logger.debug("加载 cookies 失败 %s：%s", self.settings.cookies_file, exc)
         self._curl = False
         return self._client
 
@@ -252,7 +247,22 @@ class HttpSession:
             elapsed_ms=int((time.perf_counter() - started) * 1000),
         )
 
+    async def save_cookies(self) -> None:
+        """把会话 Cookie 落盘（Netscape 格式），下次复用登录态。"""
+        if not (self.settings.cookies_file and self.settings.save_cookies and self._client is not None):
+            return
+        try:
+            if self._curl:
+                jar = getattr(self._client, "cookies", None)
+                if jar is not None and hasattr(jar, "save"):
+                    jar.save(self.settings.cookies_file)
+            else:
+                save_netscape(self._client.cookies, self.settings.cookies_file)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("保存 cookies 失败 %s：%s", self.settings.cookies_file, exc)
+
     async def close(self) -> None:
+        await self.save_cookies()
         if self._client is not None and not self._injected:
             try:
                 await self._client.aclose()
@@ -272,6 +282,21 @@ class NetworkRecord:
     text: str
 
 
+#: 反检测初始化脚本：抹掉自动化痕迹（Scrapling/StealthyFetcher 的同类做法）
+STEALTH_INIT_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en']});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+window.chrome = window.chrome || {runtime: {}};
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) => (
+  parameters.name === 'notifications'
+    ? Promise.resolve({state: Notification.permission})
+    : originalQuery(parameters)
+);
+"""
+
+
 class BrowserSession:
     """Playwright 会话：反检测参数、域名拦截、CDP 远程浏览器、网络捕获。"""
 
@@ -288,10 +313,24 @@ class BrowserSession:
     async def _ensure_page(self):
         if self._page is not None:
             return self._page
-        try:
-            from playwright.async_api import async_playwright  # noqa: PLC0415 - 可选依赖
-        except ImportError as exc:  # pragma: no cover - 依赖缺失
-            raise SessionError("未安装 playwright，无法使用浏览器会话：pip install playwright") from exc
+        # 优先 patchright（Scrapling 同款反检测分支），否则退回官方 playwright
+        async_playwright = None
+        backend = "playwright"
+        if self.settings.stealth:
+            try:
+                from patchright.async_api import async_playwright as _pr  # noqa: PLC0415
+
+                async_playwright = _pr
+                backend = "patchright"
+            except ImportError:
+                pass
+        if async_playwright is None:
+            try:
+                from playwright.async_api import async_playwright as _pw  # noqa: PLC0415
+            except ImportError as exc:  # pragma: no cover - 依赖缺失
+                raise SessionError("未安装 playwright，无法使用浏览器会话：pip install playwright") from exc
+            async_playwright = _pw
+        logger.debug("浏览器会话后端：%s", backend)
 
         proxy = self.rotator.next() if self.rotator else (self.settings.proxy or None)
         self._playwright = await async_playwright().start()
@@ -335,6 +374,11 @@ class BrowserSession:
             self._context.on("response", self._on_response)
 
         self._page = await self._context.new_page()
+        if self.settings.stealth:
+            try:
+                await self._page.add_init_script(STEALTH_INIT_SCRIPT)
+            except Exception as exc:  # noqa: BLE001 - 失败不影响基本抓取
+                logger.debug("注入反检测脚本失败：%s", exc)
         return self._page
 
     def _on_response(self, response) -> None:
@@ -378,6 +422,28 @@ class BrowserSession:
                 elapsed_ms=int((time.perf_counter() - started) * 1000),
             )
 
+    async def wait_for_challenge(self, timeout_ms: int = 15000) -> bool:
+        """等待 Cloudflare 挑战（Turnstile / Interstitial）自行通过。
+
+        判定：cf_clearance Cookie 出现，或挑战 iframe 消失。返回是否通过。
+        """
+        try:
+            page = await self._ensure_page()
+            await page.wait_for_function(
+                """() => {
+                    const hasChallenge = !!document.querySelector(
+                        'iframe[src*="challenges.cloudflare.com"], #challenge-form, .cf-turnstile'
+                    );
+                    const hasClearance = document.cookie.includes('cf_clearance');
+                    return hasClearance || !hasChallenge;
+                }""",
+                timeout=timeout_ms,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001 - 超时视为未通过
+            logger.debug("等待 Cloudflare 挑战超时：%s", exc)
+            return False
+
     # -- 网络捕获 -------------------------------------------------
     def search_network(self, pattern: str, limit: int | None = None) -> list[NetworkRecord]:
         matcher = re.compile(pattern)
@@ -388,7 +454,17 @@ class BrowserSession:
     def network(self) -> "BrowserSession":
         return self
 
+    async def save_storage_state(self) -> None:
+        """把浏览器 Cookie / localStorage 落盘，下次复用登录态。"""
+        if not (self.settings.cookies_file and self.settings.save_cookies and self._context is not None):
+            return
+        try:
+            await self._context.storage_state(path=self.settings.cookies_file)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("保存 storage_state 失败 %s：%s", self.settings.cookies_file, exc)
+
     async def close(self) -> None:
+        await self.save_storage_state()
         for closer in (self._context, self._browser):
             if closer is not None:
                 try:
@@ -452,6 +528,7 @@ class SessionManager:
 
 __all__ = [
     "AD_DOMAINS",
+    "STEALTH_INIT_SCRIPT",
     "BrowserSession",
     "DoHResolver",
     "HttpSession",

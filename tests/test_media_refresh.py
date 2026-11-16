@@ -189,3 +189,66 @@ def test_collector_refreshes_signed_audio_before_download(tmp_path, monkeypatch)
     assert captured["headers"]["Referer"] == "https://www.bilibili.com/"
     assert store.get_media_by_id(int(row["id"]))["media_url"] == "https://cdn.test/fresh-signed.m4s"
     store.close()
+
+
+def test_collector_refreshes_signed_video_before_download(tmp_path, monkeypatch):
+    """缺口 12：视频直链同样在下载前刷新签名。"""
+    from focus_crawler.core import subpage_collector as sc
+    from focus_crawler.core.media_common import MediaCandidate
+    from focus_crawler.core.storage import Storage
+    from focus_crawler.models.media import MediaRecord
+    from focus_crawler.utils.hash import media_hash
+
+    store = Storage(tmp_path / "t.db")
+    task = TaskConfig.from_dict(
+        {
+            "task_name": "t",
+            "start_urls": ["https://www.bilibili.com/video/BV1xx411c7mD"],
+            "allowed_domains": ["bilibili.com"],
+            "video": {"enabled": True, "adapter": {"bilibili": True}},
+            "audio": {"enabled": False},
+            "image": {"enabled": False},
+        }
+    )
+    task_id = store.upsert_task(task.task_name, "{}")
+    store.add_media(
+        MediaRecord(
+            task_id=task_id,
+            source_url="https://www.bilibili.com/video/BV1xx411c7mD",
+            parent_url=None,
+            media_url="https://cdn.test/old-video.mp4",
+            media_hash=media_hash("https://cdn.test/old-video.mp4"),
+            media_type="video",
+            format="mp4",
+            height=720,
+            source_kind="adapter:bilibili",
+        )
+    )
+    row = store.list_media(task_id)[0]
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        sc,
+        "refresh_video",
+        lambda task, row, fetcher: MediaCandidate(
+            url="https://cdn.test/fresh-video.mp4",
+            kind="video",
+            format="mp4",
+            height=720,
+            extra={"headers": {"Referer": "https://www.bilibili.com/"}},
+        ),
+    )
+
+    def fake_download_video(fetcher, url, target, **kwargs):
+        captured["url"] = url
+        path = tmp_path / "v.mp4"
+        path.write_bytes(b"v")
+        return path, 1
+
+    monkeypatch.setattr(sc, "download_video", fake_download_video)
+    collector = sc.SubpageCollector(task=task, store=store, task_id=task_id, fetcher=object())
+    collector._download_media(row, "video", sc.SubpageStats())
+
+    assert captured["url"] == "https://cdn.test/fresh-video.mp4"
+    assert store.get_media_by_id(int(row["id"]))["media_url"] == "https://cdn.test/fresh-video.mp4"
+    store.close()

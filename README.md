@@ -55,6 +55,8 @@
 | 暂停与继续（crawldir 快照）、开发模式（响应缓存重放）、robots.txt（含 Crawl-delay / Request-rate） | 完成 |
 | 现成模板：CrawlSpider / SitemapSpider / XMLFeedSpider / CSVFeedSpider / ShopifySpider | 完成 |
 | LinkExtractor（allow/deny、域名、CSS/XPath 范围、扩展过滤、规范化）与 JSON/JSONL/CSV/XML 导出器 | 完成 |
+| 补齐：完整广告域名库（3526 条，Scrapling 同源）、HTTP/3、TLS 指纹、Cookie 持久化、errback、每域 QPS、流式导出、视频签名刷新、Spider 图形页 | 完成 |
+| 主窗口背景：数字雨 / 代码流 + 扫描线（服务器扫盘感），面板半透明透视 | 完成 |
 | PyInstaller `--onedir` 打包：`scripts/build.ps1`、GUI 入口、测试与 exe 冒烟自检 | 完成 |
 
 ## 安装
@@ -250,18 +252,22 @@ class Blog(CrawlSpider):
   restrict_css / restrict_xpaths、deny_extensions、URL 规范化与去重；
 * 导出：`export_items(items, path, "json"|"jsonl"|"csv"|"xml")`。
 
-### 与 Scrapling 的能力差异（诚实清单）
+### 与 Scrapling 的能力对照
 
 | 项 | 本项目 | 说明 |
 | --- | --- | --- |
-| HTTP/3 | ❌ 未支持 | httpx 不支持 h3；需要时改用 curl_cffi 的 HTTP/2 或换传输层 |
-| TLS 指纹 | ⚠️ 可选 | `SessionSettings(impersonate="chrome")`，需 `pip install curl_cffi` |
-| Cloudflare Turnstile | ⚠️ 基础反检测 | 关闭自动化特征 + 自定义 UA/locale/viewport/CDP，不保证通过 Turnstile |
-| 广告域名库 | ⚠️ 精简 24 条 | `block_ads=True` 生效；可按项目需求扩充 `AD_DOMAINS` |
-| 异步会话 API | ✅ | 引擎全程 async；HTTP 会话 httpx/curl_cffi 异步实现 |
-| 代理轮换 | ✅ | round_robin / random，支持按会话配置 |
-| DoH | ✅ | 解析后用 IP + Host + SNI 扩展请求，避免本地 DNS 泄漏 |
-| 网络捕获 | ✅ | 浏览器会话 `record_requests=True`，`search_network()` 有界检索 |
+| Spider API / 模板 / LinkExtractor / 导出器 | ✅ | `spiders/`，语义对齐 |
+| 广告 / 追踪域名库 | ✅ | 3526 条，直接引入 Scrapling 同源数据（BSD-3，见 `third_party/LICENSE-Scrapling`） |
+| TLS 指纹 | ✅ 可选 | `SessionSettings(impersonate="chrome")`，需 `pip install curl_cffi` |
+| HTTP/3 | ✅ 可选 | `SessionSettings(http3=True)`，走 curl_cffi 的 h3 |
+| Cookie / 登录态持久化 | ✅ | HTTP 用 Netscape `cookies.txt`，浏览器用 Playwright `storage_state` |
+| 每域 QPS 限速 | ✅ | `requests_per_second`，令牌桶 + 自动油门叠加 |
+| errback / 失败回调 | ✅ | `Request.errback` → `Spider.errback` → `on_error` 三级回退 |
+| 流式导出 | ✅ | `export_items_stream`，十万级 Item 不爆内存 |
+| Spider 图形页 | ✅ | 主窗口「Spider」标签：加载 .py、识别类、运行/停止、日志、结果表、导出 |
+| Cloudflare Turnstile | ⚠️ 增强但不保证 | patchright 后端 + 反检测初始化脚本 + `wait_for_challenge()`；能否过盾取决于站点策略 |
+| DoH | ✅ | 解析成 IP + `Host` 头 + `sni_hostname`，避免本地 DNS 泄漏 |
+| 网络捕获 | ✅ | 浏览器会话 `record_requests=True` + `search_network()` |
 
 ## 分段下载引擎
 

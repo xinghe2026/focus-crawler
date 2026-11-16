@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Iterable
 
 from ..utils.logging import get_logger
 from .engine import CrawlerEngine, SpiderSettings
-from .exporters import export_items
+from .exporters import export_items_stream
 from .items import Item
 from .request import Request, Response
 
@@ -130,7 +130,8 @@ class Spider:
 
     # -- 导出 -----------------------------------------------------
     def export(self, path: str | Path, fmt: str = "json") -> Path:
-        return export_items(self.items, path, fmt)
+        """流式导出到文件（大结果集不会二次物化）。"""
+        return export_items_stream(self.items, path, fmt)
 
     @property
     def stats(self) -> dict[str, Any]:

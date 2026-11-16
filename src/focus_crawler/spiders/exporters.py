@@ -90,4 +90,53 @@ def export_items(items: Iterable[Any], path: str | Path, fmt: str | None = None)
     return target
 
 
-__all__ = ["FORMATS", "export_items", "to_csv", "to_json", "to_jsonl", "to_xml"]
+def export_items_stream(items: Iterable[Any], path: str | Path, fmt: str | None = None) -> Path:
+    """流式写出：不把全部结果物化到内存（适合十万级 Item）。"""
+    target = Path(path)
+    fmt = (fmt or target.suffix.lstrip(".") or "json").lower()
+    if fmt in ("ndjson", "jl"):
+        fmt = "jsonl"
+    if fmt not in FORMATS:
+        raise ValueError(f"不支持的导出格式：{fmt}，可选 {FORMATS}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", encoding="utf-8", newline="") as handle:
+        if fmt == "json":
+            handle.write("[")
+            first = True
+            for item in items:
+                payload = json.dumps(dict(_as_item(item)), ensure_ascii=False)
+                handle.write(("" if first else ",") + "\n" + payload)
+                first = False
+            handle.write("\n]")
+        elif fmt == "jsonl":
+            for item in items:
+                handle.write(json.dumps(dict(_as_item(item)), ensure_ascii=False) + "\n")
+        elif fmt == "csv":
+            writer = None
+            for item in items:
+                row = _as_item(item)
+                if writer is None:
+                    fields = fieldnames_of([row])
+                    writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+                    writer.writeheader()
+                writer.writerow({key: _csv_value(row.get(key, "")) for key in writer.fieldnames})
+        else:  # xml
+            handle.write('<?xml version="1.0" encoding="utf-8"?>\n<items>')
+            for item in items:
+                handle.write("<item>")
+                for key, value in dict(_as_item(item)).items():
+                    handle.write(f"<{key}>{escape(_xml_value(value))}</{key}>")
+                handle.write("</item>")
+            handle.write("</items>")
+    return target
+
+
+__all__ = [
+    "FORMATS",
+    "export_items",
+    "export_items_stream",
+    "to_csv",
+    "to_json",
+    "to_jsonl",
+    "to_xml",
+]

@@ -20,7 +20,7 @@ from .audio_adapter import AdapterContext, AdapterError, resolve_audio
 from .audio_downloader import download_audio
 from .audio_sniffer import sniff_static as sniff_audio
 from .hotlink import resolve_headers
-from .media_refresh import refresh_audio
+from .media_refresh import refresh_audio, refresh_video
 from .media_common import (
     MediaCandidate,
     MediaDownloadError,
@@ -366,15 +366,28 @@ class SubpageCollector:
                     fallback=self.task.media_fallback,
                 )
             elif media_type == "video":
+                # 视频直链同样带签名：下载前按来源页重新解析，避免过期 403
+                video_url = row["media_url"]
+                video_request_headers = headers
+                fresh_video = refresh_video(self.task, row, self.fetcher)
+                if fresh_video is not None:
+                    video_url = fresh_video.url
+                    video_request_headers = resolve_headers(
+                        self.task.hotlink,
+                        video_url,
+                        row["source_url"],
+                        fresh_video.extra.get("headers"),
+                    )
+                    self.store.update_media_source(media_id, video_url)
                 path, size = download_video(
                     self.fetcher,
-                    row["media_url"],
+                    video_url,
                     target,
                     config=self.task.video,
                     store=self.store,
                     media_id=media_id,
                     ffmpeg_path=self.ffmpeg_path,
-                    headers=headers,
+                    headers=video_request_headers,
                     source_kind=media_source_kind(row),
                     page_url=media_origin_url(row) or row["source_url"],
                 )

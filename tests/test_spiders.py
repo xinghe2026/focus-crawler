@@ -436,3 +436,62 @@ def test_spider_can_customize_blocked_detection():
     assert attempts["n"] >= 2
     assert spider.stats["blocked"] >= 1
     assert items
+
+
+def test_rate_limiter_enforces_qps():
+    """缺口 8：每域 QPS 令牌桶。"""
+    import time as _time
+    from focus_crawler.spiders.throttle import RateLimiter
+
+    async def scenario():
+        limiter = RateLimiter(4.0)  # 每秒 4 个
+        start = _time.monotonic()
+        for _ in range(4):
+            await limiter.acquire("a.test")
+        return _time.monotonic() - start
+
+    elapsed = run(scenario())
+    assert elapsed >= 0.5  # 4 个令牌，首个立即，其余约 0.75s
+
+
+def test_errback_called_on_final_failure():
+    """缺口 6：请求彻底失败时调用 errback。"""
+    calls: list[str] = []
+
+    class Demo(Spider):
+        start_urls = ["https://site.test/"]
+
+        def errback(self, request, exc):
+            calls.append(f"{request.url}|{exc}")
+
+        async def parse(self, response):
+            yield Item(ok=True)
+
+    class Failing(FakeSessions):
+        async def fetch(self, request):
+            raise RuntimeError("boom")
+
+    spider = Demo(settings={"retries": 0, "delay": 0})
+    async def collect():
+        return [item async for item in spider.stream(Failing())]
+
+    run(collect())
+    assert calls and "site.test" in calls[0]
+
+
+def test_streaming_exporter_handles_many_items(tmp_path):
+    """缺口 9：流式导出不物化全量。"""
+    from focus_crawler.spiders.exporters import export_items_stream
+
+    def generator():
+        for index in range(2000):
+            yield Item(id=index, title=f"t{index}")
+
+    json_path = export_items_stream(generator(), tmp_path / "big.json")
+    assert json_path.stat().st_size > 1000
+    assert json_path.read_text(encoding="utf-8").rstrip().endswith("]")
+
+    csv_path = export_items_stream(generator(), tmp_path / "big.csv")
+    lines = csv_path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "id,title"
+    assert len(lines) == 2001

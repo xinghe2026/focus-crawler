@@ -153,3 +153,29 @@ def test_doh_rewrites_host_and_keeps_original_host_header(monkeypatch):
     assert response.status == 200
     assert "93.184.216.34" in seen["url"]
     assert seen["host"] == "example.test"
+
+
+def test_full_ad_domain_list_is_bundled():
+    """缺口 1：内置完整广告库（Scrapling 同源，Peter Lowe's list）。"""
+    from focus_crawler.spiders.sessions import AD_DOMAINS
+
+    assert len(AD_DOMAINS) >= 3000
+    assert host_blocked("https://securepubads.g.doubleclick.net/tag/js", AD_DOMAINS)
+    assert not host_blocked("https://example.com/index.html", AD_DOMAINS)
+
+
+def test_http_session_persists_cookies(tmp_path):
+    """缺口 7：Cookie 落盘后下次会话可复用。"""
+    import httpx as _httpx
+
+    cookie_file = tmp_path / "cookies.txt"
+
+    def handler(request: _httpx.Request) -> _httpx.Response:
+        return _httpx.Response(200, headers={"set-cookie": "sid=abc123; Path=/"}, text="ok")
+
+    client = _httpx.AsyncClient(transport=_httpx.MockTransport(handler))
+    session = HttpSession(SessionSettings(cookies_file=str(cookie_file)), client=client)
+    run(session.fetch(Request(url="https://site.test/")))
+    run(session.save_cookies())
+    assert cookie_file.exists()
+    assert "sid" in cookie_file.read_text(encoding="utf-8")
