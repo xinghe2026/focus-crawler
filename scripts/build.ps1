@@ -38,6 +38,16 @@ if ($LASTEXITCODE -eq 0) {
   Write-Host "检测到 imageio-ffmpeg，打包内置 ffmpeg"
   $PyArgs += @("--collect-binaries", "imageio_ffmpeg")
 }
+& $Python -c "import curl_cffi" 2>$null
+if ($LASTEXITCODE -eq 0) {
+  Write-Host "检测到 curl_cffi，打包 TLS 指纹 / HTTP3 支持"
+  $PyArgs += @("--collect-all", "curl_cffi")
+}
+& $Python -c "import patchright" 2>$null
+if ($LASTEXITCODE -eq 0) {
+  Write-Host "检测到 patchright，打包反检测浏览器后端"
+  $PyArgs += @("--collect-all", "patchright")
+}
 & $Python -c "import yt_dlp" 2>$null
 if ($LASTEXITCODE -eq 0) {
   Write-Host "检测到 yt-dlp，打包通用解析依赖（体积约 30MB）"
