@@ -161,20 +161,37 @@ def _validate_results(results: Any, name: str) -> list[MediaCandidate]:
 
 
 def resolve_audio(page_url: str, cfg: AudioConfig, ctx: AdapterContext) -> list[MediaCandidate]:
-    """调用对应平台适配器，返回音频候选；没有可用适配器时返回空列表。
+    """音频候选解析：自定义脚本 > 平台适配器 / yt-dlp（按 B 站优先级）> 空。
 
-    配置了 custom_script 时优先使用用户脚本，否则按域名选择内置适配器。
+    配置了 custom_script 时优先使用用户脚本，否则按域名选择内置适配器；
+    B 站按 ``adapter.bilibili_priority`` 决定由 yt-dlp 还是内置适配器先行。
     """
     custom = _load_custom_adapter(cfg, ctx)
     if custom is not None:
         return _run_adapter(custom, page_url, ctx, "custom")
 
-    candidates: list[MediaCandidate] = []
+    priority = getattr(cfg.adapter, "bilibili_priority", "ytdlp_first")
+    headers = dict(ctx.headers or {})
     name = adapter_for(page_url, cfg)
+    is_bilibili = name == "bilibili"
+
+    if is_bilibili and priority == "ytdlp_first":
+        candidates = ytdlp_resolve(
+            page_url, cfg.adapter.ytdlp, kind="audio", headers=headers, force=True
+        )
+        if candidates:
+            logger.info("B 站音频由 yt-dlp 解析（%d 条）", len(candidates))
+            return candidates
+        logger.info("yt-dlp 未解析出 B 站音频，回退内置适配器")
+
+    candidates: list[MediaCandidate] = []
     if name is not None:
         module = _load_adapter(name)
         if module is not None:
             candidates = _run_adapter(module, page_url, ctx, name)
+
+    if is_bilibili and priority == "adapter_only":
+        return candidates
 
     existing = len(candidates) + max(0, int(getattr(ctx, "existing", 0) or 0))
     candidates.extend(
@@ -182,7 +199,7 @@ def resolve_audio(page_url: str, cfg: AudioConfig, ctx: AdapterContext) -> list[
             page_url,
             cfg.adapter.ytdlp,
             kind="audio",
-            headers=dict(ctx.headers or {}),
+            headers=headers,
             existing_count=existing,
         )
     )

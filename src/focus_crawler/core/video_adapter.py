@@ -78,20 +78,49 @@ def _validate_results(results: Any, name: str) -> list[MediaCandidate]:
     return candidates
 
 
-def resolve_video(page_url: str, cfg: VideoConfig, ctx: AdapterContext) -> list[MediaCandidate]:
-    """平台适配器优先，没有结果时按 ``ytdlp.mode``（off/auto/force）兜底。"""
-    candidates: list[MediaCandidate] = []
+def _run_platform(page_url: str, cfg: VideoConfig, ctx: AdapterContext):
+    """调用域名对应的平台适配器；没有适配器返回 (None, [])。"""
     name = adapter_for(page_url, cfg)
-    if name is not None:
-        module = _load_adapter(name)
-        if module is not None:
-            try:
-                results = module.resolve_video(page_url, ctx)
-            except AdapterError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 适配器内部异常统一分类
-                raise AdapterError(f"适配器执行异常：{exc}") from exc
-            candidates = _validate_results(results, name)
+    if name is None:
+        return None, []
+    module = _load_adapter(name)
+    if module is None:
+        return name, []
+    try:
+        results = module.resolve_video(page_url, ctx)
+    except AdapterError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 适配器内部异常统一分类
+        raise AdapterError(f"适配器执行异常：{exc}") from exc
+    return name, _validate_results(results, name)
+
+
+def resolve_video(page_url: str, cfg: VideoConfig, ctx: AdapterContext) -> list[MediaCandidate]:
+    """按 ``adapter.bilibili_priority`` 决定 B 站用 yt-dlp 还是内置适配器。
+
+    * ``ytdlp_first``（默认）：B 站先交给 yt-dlp（其 extractor 跟进站点改版更快），
+      解析不出结果再回退内置适配器 —— 同一页面只会真正跑一条解析链路；
+    * ``adapter_first``：内置适配器优先，yt-dlp 仅在没结果时补漏；
+    * ``adapter_only``：B 站只用内置适配器，不调用 yt-dlp（完全避免重复实现）。
+    """
+    priority = getattr(cfg.adapter, "bilibili_priority", "ytdlp_first")
+    headers = dict(ctx.headers or {})
+    is_bilibili = adapter_for(page_url, cfg) == "bilibili"
+
+    if is_bilibili and priority == "ytdlp_first":
+        candidates = ytdlp_resolve(
+            page_url, cfg.adapter.ytdlp, kind="video", headers=headers, force=True
+        )
+        if candidates:
+            logger.info("B 站视频由 yt-dlp 解析（%d 条）", len(candidates))
+            return candidates
+        logger.info("yt-dlp 未解析出 B 站视频，回退内置适配器")
+        _, fallback = _run_platform(page_url, cfg, ctx)
+        return fallback
+
+    name, candidates = _run_platform(page_url, cfg, ctx)
+    if is_bilibili and priority == "adapter_only":
+        return candidates
 
     existing = len(candidates) + max(0, int(getattr(ctx, "existing", 0) or 0))
     candidates.extend(
@@ -99,7 +128,7 @@ def resolve_video(page_url: str, cfg: VideoConfig, ctx: AdapterContext) -> list[
             page_url,
             cfg.adapter.ytdlp,
             kind="video",
-            headers=dict(ctx.headers or {}),
+            headers=headers,
             existing_count=existing,
         )
     )

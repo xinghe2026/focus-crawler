@@ -13,6 +13,8 @@ RENDER_MODES = ("static", "playwright")
 FIELD_TYPES = ("text", "html", "attr", "current_url", "json")
 FIELD_TRANSFORMS = ("strip", "date", "lower", "upper", "int", "float", "absolute_url")
 YTDLP_MODES = ("off", "auto", "force")
+#: B 站解析优先级：yt-dlp 优先（默认，维护更及时）/ 内置适配器优先 / 只用内置适配器
+BILIBILI_PRIORITIES = ("ytdlp_first", "adapter_first", "adapter_only")
 
 
 class ConfigError(ValueError):
@@ -460,6 +462,7 @@ class YtdlpConfig:
 @dataclass
 class VideoAdapterConfig:
     bilibili: bool = True
+    bilibili_priority: str = "ytdlp_first"
     ytdlp: YtdlpConfig = field(default_factory=YtdlpConfig)
 
     @classmethod
@@ -467,6 +470,13 @@ class VideoAdapterConfig:
         data = _read_mapping(raw, prefix, errors)
         return cls(
             bilibili=_read_bool(data.get("bilibili"), f"{prefix}.bilibili", errors, True),
+            bilibili_priority=_read_choice(
+                data.get("bilibili_priority"),
+                f"{prefix}.bilibili_priority",
+                errors,
+                BILIBILI_PRIORITIES,
+                "ytdlp_first",
+            ),
             ytdlp=YtdlpConfig.from_dict(data.get("ytdlp"), errors, f"{prefix}.ytdlp"),
         )
 
@@ -511,6 +521,7 @@ class VideoConfig:
 @dataclass
 class AudioAdapterConfig:
     bilibili: bool = True
+    bilibili_priority: str = "ytdlp_first"
     music_163: bool = False
     custom_script: str = ""
     ytdlp: YtdlpConfig = field(default_factory=YtdlpConfig)
@@ -520,6 +531,13 @@ class AudioAdapterConfig:
         data = _read_mapping(raw, prefix, errors)
         return cls(
             bilibili=_read_bool(data.get("bilibili"), f"{prefix}.bilibili", errors, True),
+            bilibili_priority=_read_choice(
+                data.get("bilibili_priority"),
+                f"{prefix}.bilibili_priority",
+                errors,
+                BILIBILI_PRIORITIES,
+                "ytdlp_first",
+            ),
             music_163=_read_bool(data.get("music_163"), f"{prefix}.music_163", errors, False),
             custom_script=_read_str(data.get("custom_script"), f"{prefix}.custom_script", errors),
             ytdlp=YtdlpConfig.from_dict(data.get("ytdlp"), errors, f"{prefix}.ytdlp"),

@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..config.schema import ConfigError, TaskConfig, YTDLP_MODES
+from ..config.schema import BILIBILI_PRIORITIES, ConfigError, TaskConfig, YTDLP_MODES
 from ..core import ytdlp_engine
 from . import settings
 
@@ -78,6 +78,11 @@ def join_headers_text(headers: dict[str, str]) -> str:
 DEFAULT_SUBPAGE_TYPES = ["data", "image", "video", "audio"]
 DEFAULT_VIDEO_SNIFF = ["m3u8", "mp4", "flv"]
 YTDLP_MODE_LABELS = {"off": "关闭", "auto": "仅补漏（默认）", "force": "积极（未知站点也尝试）"}
+BILI_PRIORITY_LABELS = {
+    "ytdlp_first": "yt-dlp 优先（推荐）",
+    "adapter_first": "内置适配器优先",
+    "adapter_only": "仅内置适配器",
+}
 YTDLP_QUALITY_PRESETS = {
     "highest", "best", "worst", "2160p", "1440p", "1080p", "720p", "480p", "360p", "ba",
 }
@@ -163,6 +168,7 @@ def default_task_raw(crawl: dict | None = None) -> dict:
             "copyright_confirm": True,
             "adapter": {
                 "bilibili": True,
+                "bilibili_priority": "ytdlp_first",
                 "ytdlp": {
                     "mode": "auto",
                     "quality": "highest",
@@ -255,6 +261,11 @@ def _choice_combo(values: tuple[str, ...], labels: dict[str, str], current: str 
     index = combo.findData(current)
     combo.setCurrentIndex(index if index >= 0 else 0)
     return combo
+
+
+def _set_choice(combo: QComboBox, value: str) -> None:
+    index = combo.findData(value)
+    combo.setCurrentIndex(index if index >= 0 else 0)
 
 
 def _fill_ytdlp(
@@ -610,6 +621,10 @@ class TaskEditorDialog(QDialog):
         self.video_use_ffmpeg = QCheckBox("使用 ffmpeg 合并")
         self.video_ffmpeg_path = QLineEdit()
         self.video_adapter_bilibili = QCheckBox("启用 B 站视频适配器（完整 MP4）")
+        self.video_bili_priority = _choice_combo(BILIBILI_PRIORITIES, BILI_PRIORITY_LABELS)
+        self.video_bili_priority.setToolTip(
+            "yt-dlp 的 B 站提取器跟进改版更快；选「仅内置适配器」可完全避免调用 yt-dlp"
+        )
         self.video_ytdlp_mode = _choice_combo(YTDLP_MODES, YTDLP_MODE_LABELS)
         self.video_ytdlp_quality = QLineEdit()
         self.video_ytdlp_quality.setPlaceholderText("highest / 1080p / bv*+ba（留空用 highest）")
@@ -626,6 +641,7 @@ class TaskEditorDialog(QDialog):
         video_form.addRow("下载目录", self.video_download_dir)
         video_form.addRow("清晰度偏好", self.video_quality)
         video_form.addRow("", self.video_adapter_bilibili)
+        video_form.addRow("B 站解析优先级", self.video_bili_priority)
         video_form.addRow("yt-dlp 通用解析", self.video_ytdlp_mode)
         video_form.addRow("yt-dlp 画质/格式", self.video_ytdlp_quality)
         video_form.addRow("yt-dlp Cookies 文件", self.video_ytdlp_cookies)
@@ -646,6 +662,7 @@ class TaskEditorDialog(QDialog):
         self.audio_transcode = QLineEdit()
         self.audio_transcode.setPlaceholderText("可留空，例如 mp3")
         self.adapter_bilibili = QCheckBox("启用 B 站适配器")
+        self.audio_bili_priority = _choice_combo(BILIBILI_PRIORITIES, BILI_PRIORITY_LABELS)
         self.adapter_music_163 = QCheckBox("启用网易云音乐适配器")
         self.adapter_custom_script = QLineEdit()
         self.adapter_custom_script.setPlaceholderText("可留空，例如 custom_adapter.py（需导出 resolve_audio）")
@@ -665,6 +682,7 @@ class TaskEditorDialog(QDialog):
         audio_form.addRow("下载并发", self.audio_concurrency)
         audio_form.addRow("转码格式", self.audio_transcode)
         audio_form.addRow("", self.adapter_bilibili)
+        audio_form.addRow("B 站解析优先级", self.audio_bili_priority)
         audio_form.addRow("", self.adapter_music_163)
         audio_form.addRow("自定义适配器", self.adapter_custom_script)
         audio_form.addRow("yt-dlp 通用解析", self.audio_ytdlp_mode)
@@ -794,6 +812,10 @@ class TaskEditorDialog(QDialog):
         self.video_ffmpeg_path.setText(str(video.get("ffmpeg_path") or settings.ffmpeg_path()))
         video_adapter = _section(video, "adapter")
         self.video_adapter_bilibili.setChecked(bool(video_adapter.get("bilibili", True)))
+        _set_choice(
+            self.video_bili_priority,
+            str(video_adapter.get("bilibili_priority") or "ytdlp_first"),
+        )
         _fill_ytdlp(
             _section(video_adapter, "ytdlp"),
             self.video_ytdlp_mode,
@@ -811,6 +833,10 @@ class TaskEditorDialog(QDialog):
         self.audio_concurrency.setValue(int(audio.get("concurrency", 3)))
         self.audio_transcode.setText(str(audio.get("transcode_to") or ""))
         self.adapter_bilibili.setChecked(bool(audio_adapter.get("bilibili", True)))
+        _set_choice(
+            self.audio_bili_priority,
+            str(audio_adapter.get("bilibili_priority") or "ytdlp_first"),
+        )
         self.adapter_music_163.setChecked(bool(audio_adapter.get("music_163", False)))
         self.adapter_custom_script.setText(str(audio_adapter.get("custom_script") or ""))
         _fill_ytdlp(
@@ -1033,7 +1059,12 @@ class TaskEditorDialog(QDialog):
 
         video = raw.setdefault("video", {})
         video_adapter = video.get("adapter") if isinstance(video.get("adapter"), dict) else {}
-        video_adapter.update({"bilibili": self.video_adapter_bilibili.isChecked()})
+        video_adapter.update(
+            {
+                "bilibili": self.video_adapter_bilibili.isChecked(),
+                "bilibili_priority": str(self.video_bili_priority.currentData() or "ytdlp_first"),
+            }
+        )
         video_adapter["ytdlp"] = _collect_ytdlp(
             self.video_ytdlp_mode,
             self.video_ytdlp_quality,
@@ -1059,6 +1090,7 @@ class TaskEditorDialog(QDialog):
         adapter.update(
             {
                 "bilibili": self.adapter_bilibili.isChecked(),
+                "bilibili_priority": str(self.audio_bili_priority.currentData() or "ytdlp_first"),
                 "music_163": self.adapter_music_163.isChecked(),
                 "custom_script": self.adapter_custom_script.text().strip(),
                 "ytdlp": _collect_ytdlp(

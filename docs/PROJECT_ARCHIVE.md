@@ -58,6 +58,13 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1   # 打包 + 冒烟
 **仍然存在的客观限制**：Turnstile 属对抗性能力，只能"提升通过率"不能承诺；HTTP/3 依赖
 curl_cffi 的 h3 支持与目标站协商。这两项在文档与 UI 中均已如实标注。
 
+## 4.5 B 站解析去重与入口位置（2026-11-16 第三轮）
+
+- 新增 `adapter.bilibili_priority`：`ytdlp_first`（默认）/ `adapter_first` / `adapter_only`，
+  同一页面只跑一条解析链路，避免与 yt-dlp 的 BiliBili extractor 重复。
+- Spider 图形入口从「第一个标签」移到「最后一个标签（Spider（进阶））」，
+  避免抢占日常任务主流程。
+
 ## 5. 复盘：这一轮为什么被判定为半成品
 
 - 不是 watchdog 超时：所有工具调用正常返回，最后一次 `pytest` 239 passed、`git push` 成功。

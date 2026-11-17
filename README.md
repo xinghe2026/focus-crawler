@@ -218,6 +218,16 @@ async for item in spider.stream():        # 流式
 spider.export("out.csv")                  # 导出
 ```
 
+### 图形入口
+
+主窗口最后一个标签页 **「Spider（进阶）」**（放在末尾，避免抢占日常「任务 → 采集」主流程）：
+
+1. 选择 `.py` 文件 → 点「识别类」，自动列出文件里的 Spider 子类；
+2. 设置并发数、请求间隔，勾选「遵守 robots.txt」「开发模式」；
+3. 断点目录可留空；填写后停止/中断可续跑；
+4. 「运行」→ 日志与结果表实时滚动，「停止」优雅中断；
+5. 「导出结果」→ JSON / JSONL / CSV / XML（流式写盘）。
+
 ### 引擎能力
 
 | 能力 | 实现 |
@@ -268,6 +278,37 @@ class Blog(CrawlSpider):
 | Cloudflare Turnstile | ⚠️ 增强但不保证 | patchright 后端 + 反检测初始化脚本 + `wait_for_challenge()`；能否过盾取决于站点策略 |
 | DoH | ✅ | 解析成 IP + `Host` 头 + `sni_hostname`，避免本地 DNS 泄漏 |
 | 网络捕获 | ✅ | 浏览器会话 `record_requests=True` + `search_network()` |
+
+## B 站：yt-dlp 与内置适配器如何取舍
+
+yt-dlp 自带 `BiliBili` 提取器，项目里也有一份内置适配器（`adapters/bilibili/`），
+两者能力重叠。为避免"两套代码同时跑"，配置项 `adapter.bilibili_priority` 决定谁先上：
+
+| 取值 | 行为 | 适用场景 |
+| --- | --- | --- |
+| `ytdlp_first`（默认） | B 站先交给 yt-dlp，解析不出结果才回退内置适配器 | 想让站点改版跟进最快 |
+| `adapter_first` | 内置适配器优先，yt-dlp 仅在没结果时补漏（旧行为） | 想少依赖 yt-dlp / 自控解析 |
+| `adapter_only` | B 站 **完全不调用** yt-dlp | 完全不想让 yt-dlp 碰 B 站 |
+
+无论选哪种，**同一页面只会真正跑一条解析链路**（另一方在"已有候选"时直接跳过），
+不会产生额外的网络请求。
+
+```json
+{
+  "video": {
+    "adapter": { "bilibili": true, "bilibili_priority": "ytdlp_first" }
+  },
+  "audio": {
+    "adapter": { "bilibili": true, "bilibili_priority": "ytdlp_first" }
+  }
+}
+```
+
+为什么保留内置适配器而不是删掉：
+
+- 未安装 yt-dlp 或 yt-dlp 不可用时仍能抓 B 站；
+- B 站 `durl` 常给出完整 MP4（单文件），比 DASH 合流更省事；
+- 离线 / 内网 / 打包瘦身场景可以用 `adapter_only` 完全不依赖 yt-dlp。
 
 ## 分段下载引擎
 

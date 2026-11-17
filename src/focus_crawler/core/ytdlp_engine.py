@@ -435,6 +435,7 @@ def maybe_resolve(
     kind: str = "video",
     headers: dict[str, str] | None = None,
     existing_count: int = 0,
+    force: bool = False,
 ) -> list[MediaCandidate]:
     """适配器入口：按 mode 判断是否调用 yt-dlp，并把各类失败降级为"跳过"。
 
@@ -444,9 +445,10 @@ def maybe_resolve(
     """
     if cfg is None or not cfg.enabled:
         return []
-    if existing_count > 0:
-        return []
-    if cfg.mode == "auto":
+    if not force:
+        if existing_count > 0:
+            return []
+    if cfg.mode == "auto" and not force:
         try:
             if not supports(page_url):
                 logger.debug("yt-dlp 无该站点提取器，跳过：%s", page_url)

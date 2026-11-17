@@ -327,8 +327,6 @@ class MainWindow(QMainWindow):
 
     def _build_tabs(self) -> QTabWidget:
         self.tabs = QTabWidget()
-        self.spider_page = SpiderPage()
-        self.tabs.addTab(self.spider_page, "Spider")
 
         monitor = QWidget()
         monitor_layout = QVBoxLayout(monitor)
@@ -621,6 +619,9 @@ class MainWindow(QMainWindow):
             lambda: self._delete_media_file("audio", self.audio_table)
         )
 
+        # Spider 是进阶入口：放在最后，避免抢占日常「任务 → 采集」主流程
+        self.spider_page = SpiderPage()
+        self.tabs.addTab(self.spider_page, "Spider（进阶）")
         return self.tabs
 
     # ---------- 勾选与列宽 ----------
