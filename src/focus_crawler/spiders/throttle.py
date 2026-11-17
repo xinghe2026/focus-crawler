@@ -188,9 +188,9 @@ class AutoThrottle:
 
 
 def domain_of(url: str) -> str:
-    from urllib.parse import urlsplit
+    from ..utils.urls import host_of
 
-    return (urlsplit(url).hostname or "").lower()
+    return host_of(url)
 
 
 _RE_CRAWL_DELAY = re.compile(r"(?im)^\s*crawl-delay\s*:\s*([0-9.]+)")

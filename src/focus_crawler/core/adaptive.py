@@ -25,7 +25,10 @@ _FOCUS_ATTRS = ("class", "id", "href", "src", "data-id", "itemprop")
 
 
 def clean_text(value: str | None) -> str:
-    return " ".join((value or "").split())[:TEXT_LIMIT]
+    """复用 utils.text.clean_text，再按指纹长度截断。"""
+    from ..utils.text import clean_text as _clean
+
+    return _clean(value or "")[:TEXT_LIMIT]
 
 
 def parse_html(html: str) -> HtmlElement | None:
@@ -231,12 +234,10 @@ class AdaptiveStore:
 
 
 def domain_of(page_url: str) -> str:
-    try:
-        from urllib.parse import urlsplit
+    """兼容旧调用：统一走 utils.urls.host_of。"""
+    from ..utils.urls import host_of
 
-        return (urlsplit(page_url).hostname or "").lower()
-    except ValueError:
-        return ""
+    return host_of(page_url)
 
 
 __all__ = [

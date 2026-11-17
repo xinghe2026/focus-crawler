@@ -17,17 +17,10 @@ BROWSER_HEADERS = {
 
 
 def host_matches(host: str, pattern: str) -> bool:
-    pattern = (pattern or "").strip().lower()
-    if not pattern:
-        return False
-    if pattern == "*":
-        return True
-    if pattern.startswith("*."):
-        suffix = pattern[1:]
-        return host == pattern[2:] or host.endswith(suffix)
-    if pattern.endswith("*"):
-        return host.startswith(pattern[:-1])
-    return host == pattern or host.endswith("." + pattern)
+    """兼容入口：统一走 utils.urls.host_matches。"""
+    from ..utils.urls import host_matches as _host_matches
+
+    return _host_matches(host, pattern)
 
 
 def _rule_matches(rule: HotlinkRule, host: str, media_url: str) -> bool:

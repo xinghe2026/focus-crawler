@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from focus_crawler.config.schema import AudioConfig, VideoConfig
 from focus_crawler.core.audio_sniffer import sniff_static as sniff_audio
-from focus_crawler.core.video_sniffer import parse_m3u8, pick_variant, sniff_static as sniff_video
+from focus_crawler.core.hls import parse_playlist, pick_variant
+from focus_crawler.core.video_sniffer import sniff_static as sniff_video
 
 VIDEO_HTML = """
 <html><head><meta property="og:video" content="/media/og.mp4"></head>
@@ -66,19 +67,19 @@ def test_audio_static_candidates_and_exclude():
 
 
 def test_parse_master_m3u8():
-    parsed = parse_m3u8(MASTER, "https://cdn.example.com/hls/master.m3u8")
-    assert parsed["is_master"] is True
-    assert len(parsed["variants"]) == 2
-    assert parsed["variants"][0]["bandwidth"] == 800000
-    assert parsed["segments"] == []
-    best = pick_variant(parsed["variants"], "highest")
-    assert best["url"] == "https://cdn.example.com/hls/720/index.m3u8"
+    playlist = parse_playlist(MASTER, "https://cdn.example.com/hls/master.m3u8")
+    assert playlist.is_master is True
+    assert len(playlist.variants) == 2
+    assert playlist.variants[0].bandwidth == 800000
+    assert playlist.segments == []
+    best = pick_variant(playlist, "highest")
+    assert best.url == "https://cdn.example.com/hls/720/index.m3u8"
 
 
 def test_parse_media_m3u8():
-    parsed = parse_m3u8(MEDIA, "https://cdn.example.com/hls/index.m3u8")
-    assert parsed["is_master"] is False
-    assert [segment["url"] for segment in parsed["segments"]] == [
+    playlist = parse_playlist(MEDIA, "https://cdn.example.com/hls/index.m3u8")
+    assert playlist.is_master is False
+    assert [segment.url for segment in playlist.segments] == [
         "https://cdn.example.com/hls/seg0.ts",
         "https://cdn.example.com/hls/seg1.ts",
     ]

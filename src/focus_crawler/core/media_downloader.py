@@ -198,31 +198,3 @@ class MediaDownloader:
         total = summary.total
         done = processed + summary.skipped
         self.on_progress(min(done, total), total)
-
-
-def download_images(
-    store: Any,
-    task_id: int,
-    task_name: str,
-    fetcher: Any,
-    concurrency: int = 3,
-    media_ids: list[int] | None = None,
-    media_root: str | Path | None = None,
-    should_stop: Callable[[], bool] | None = None,
-    should_pause: Callable[[], bool] | None = None,
-    on_progress: Callable[[int, int], None] | None = None,
-) -> DownloadSummary:
-    """图片批量下载便捷入口。"""
-    downloader = MediaDownloader(
-        store=store,
-        task_id=task_id,
-        task_name=task_name,
-        fetcher=fetcher,
-        media_type="image",
-        concurrency=concurrency,
-        media_root=media_root,
-        should_stop=should_stop,
-        should_pause=should_pause,
-        on_progress=on_progress,
-    )
-    return downloader.run(media_ids)

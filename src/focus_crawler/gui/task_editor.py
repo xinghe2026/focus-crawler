@@ -236,11 +236,6 @@ def _combo(options: list[str], value: Any) -> QComboBox:
     return combo
 
 
-def _line(value: Any) -> QLineEdit:
-    edit = QLineEdit("" if value is None else str(value))
-    return edit
-
-
 def _scrollable(widget: QWidget) -> QScrollArea:
     area = QScrollArea()
     area.setWidgetResizable(True)

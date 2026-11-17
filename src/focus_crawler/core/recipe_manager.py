@@ -40,12 +40,3 @@ def import_recipe(zip_path: str | Path, dest_dir: str | Path) -> Path:
     if len(top_levels) == 1:
         return destination / next(iter(top_levels))
     return destination
-
-
-def copy_recipe(recipe_dir: str | Path, dest_dir: str | Path) -> Path:
-    source = Path(recipe_dir)
-    target = Path(dest_dir) / source.name
-    if target.exists():
-        shutil.rmtree(target)
-    shutil.copytree(source, target)
-    return target

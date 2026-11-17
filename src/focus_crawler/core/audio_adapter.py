@@ -11,20 +11,14 @@ from urllib.parse import urlencode, urlsplit
 
 from ..config.schema import AudioConfig
 from ..utils.logging import get_logger
+from .adapter_registry import AdapterError, adapter_for as _adapter_for, build_candidates
+from .adapter_registry import load_adapter as _load_adapter_module
 from .media_common import MediaCandidate, guess_format
 from .ytdlp_engine import maybe_resolve as ytdlp_resolve
 
 logger = get_logger("audio_adapter")
 
-ADAPTER_HOSTS = {
-    "bilibili": ("bilibili.com", "b23.tv"),
-    "music_163": ("music.163.com", "y.music.163.com"),
-}
 _CUSTOM_ADAPTER_CACHE: dict[str, tuple[float, Any]] = {}
-
-
-class AdapterError(RuntimeError):
-    """适配器请求或返回值校验失败。"""
 
 
 @dataclass
@@ -61,26 +55,12 @@ def request_json(ctx: AdapterContext, url: str, params: dict[str, Any] | None = 
 
 
 def adapter_for(page_url: str, cfg: AudioConfig) -> str | None:
-    host = (urlsplit(page_url).hostname or "").lower()
-    if cfg.adapter.bilibili and any(host == item or host.endswith("." + item) for item in ADAPTER_HOSTS["bilibili"]):
-        return "bilibili"
-    if cfg.adapter.music_163 and any(
-        host == item or host.endswith("." + item) for item in ADAPTER_HOSTS["music_163"]
-    ):
-        return "music_163"
-    return None
+    """兼容入口：统一走 adapter_registry。"""
+    return _adapter_for(page_url, cfg.adapter)
 
 
 def _load_adapter(name: str):
-    if name == "bilibili":
-        from ..adapters.bilibili import audio_adapter
-
-        return audio_adapter
-    if name == "music_163":
-        from ..adapters.music_163 import audio_adapter
-
-        return audio_adapter
-    return None
+    return _load_adapter_module(name, "audio")
 
 
 def _load_custom_adapter(cfg: AudioConfig, ctx: AdapterContext):
@@ -124,40 +104,8 @@ def _run_adapter(module, page_url: str, ctx: AdapterContext, name: str) -> list[
 
 
 def _validate_results(results: Any, name: str) -> list[MediaCandidate]:
-    if not isinstance(results, list):
-        raise AdapterError("适配器返回值必须是列表")
-
-    candidates: list[MediaCandidate] = []
-    for item in results:
-        if not isinstance(item, dict):
-            raise AdapterError("适配器返回项必须是字典")
-        audio_url = str(item.get("audio_url") or "").strip()
-        if not audio_url:
-            raise AdapterError("适配器返回项缺少 audio_url")
-        fmt = str(item.get("format") or "").strip().lower() or guess_format(audio_url) or "mp3"
-        headers = item.get("headers") or {}
-        if not isinstance(headers, dict):
-            raise AdapterError("适配器 headers 必须是字典")
-        headers = {str(key): str(value) for key, value in headers.items()}
-        duration = item.get("duration")
-        bitrate = item.get("bitrate")
-        candidates.append(
-            MediaCandidate(
-                url=audio_url,
-                kind="audio",
-                format=fmt,
-                quality=str(item.get("title") or "").strip() or None,
-                source_kind=f"adapter:{name}",
-                extra={
-                    "duration": float(duration) if isinstance(duration, (int, float)) else None,
-                    "bitrate": int(bitrate) if isinstance(bitrate, (int, float)) else None,
-                    "headers": headers,
-                },
-            )
-        )
-    if candidates:
-        logger.info("音频适配器 %s 解析到 %d 条音频", name, len(candidates))
-    return candidates
+    """音频候选校验（统一实现见 adapter_registry）。"""
+    return build_candidates(results, name, url_field="audio_url", kind="audio", default_format="mp3")
 
 
 def resolve_audio(page_url: str, cfg: AudioConfig, ctx: AdapterContext) -> list[MediaCandidate]:

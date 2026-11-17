@@ -122,11 +122,14 @@ class SpiderPage(QWidget):
         self.class_combo.setMinimumWidth(180)
         reload_button = QPushButton("识别类")
         reload_button.clicked.connect(self._scan_classes)
+        template_button = QPushButton("新建模板")
+        template_button.clicked.connect(self._create_template)
         file_row.addWidget(self.path_edit, 1)
         file_row.addWidget(browse)
         file_row.addWidget(QLabel("类"))
         file_row.addWidget(self.class_combo)
         file_row.addWidget(reload_button)
+        file_row.addWidget(template_button)
         outer.addWidget(file_group)
 
         option_group = QGroupBox("运行参数")
@@ -188,6 +191,42 @@ class SpiderPage(QWidget):
         outer.addWidget(splitter, 1)
 
     # -- 文件 -----------------------------------------------------
+    TEMPLATE = '''"""FocusCrawler Spider 模板：保存后点「识别类」即可运行。"""
+
+from focus_crawler.spiders import Item, Request, Spider
+
+
+class MySpider(Spider):
+    name = "my_spider"
+    start_urls = ["https://example.com/"]
+    custom_settings = {"concurrency": 8, "delay": 0.3, "robots_txt_obey": True}
+
+    async def parse(self, response):
+        # 提取字段（CSS / XPath 均可）
+        yield Item(
+            title=response.css("h1::text").get(default="").strip(),
+            url=response.url,
+        )
+        # 跟踪链接：可换成 LinkExtractor 做 allow/deny 过滤
+        for href in response.css("a::attr(href)").getall():
+            yield Request(url=response.urljoin(href))
+'''
+
+    def _create_template(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "新建 Spider 模板", str(Path.cwd() / "my_spider.py"), "Python (*.py)"
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(self.TEMPLATE, encoding="utf-8")
+        except OSError as exc:
+            self._append_log(f"写入模板失败：{exc}")
+            return
+        self.path_edit.setText(path)
+        self._scan_classes()
+        self._append_log(f"已生成模板：{path}（改 start_urls / parse 后即可运行）")
+
     def _browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择 Spider 文件", str(Path.cwd()), "Python (*.py)")
         if path:

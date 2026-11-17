@@ -167,7 +167,7 @@ def test_main_window_image_tab(qapp, task_config):
 
     window = MainWindow()
     try:
-        assert window.tabs.count() == 7  # 新增 Spider 页
+        assert window.tabs.count() == 6  # Spider 已改为独立窗口，不占标签
         window.task_table.selectRow(0)
         assert window.image_table.rowCount() == 1
         assert window.image_source_combo.count() == 2
@@ -363,7 +363,10 @@ def test_spider_page_loads_classes_and_shows_items(qapp, tmp_path):
         "        yield Item(title='x')\n",
         encoding="utf-8",
     )
-    page = SpiderPage()
+    window = MainWindow()
+    window._open_spider_window()
+    page = window._spider_page
+    assert page is not None
     try:
         page.path_edit.setText(str(spider_file))
         page._scan_classes()
@@ -373,5 +376,65 @@ def test_spider_page_loads_classes_and_shows_items(qapp, tmp_path):
         assert len(page._items) == 1
         page._export_to(tmp_path / "out.json") if hasattr(page, "_export_to") else None
     finally:
-        page.shutdown()
-        page.deleteLater()
+        window._close_spider_window()
+        window.close()
+        window.deleteLater()
+
+
+def test_task_package_export_import_roundtrip(qapp, tmp_path, monkeypatch):
+    """recipe_manager 接线：任务包 zip 可导出并重新导入。"""
+    from PySide6.QtWidgets import QFileDialog
+
+    from focus_crawler.config.schema import TaskConfig
+
+    window = MainWindow()
+    try:
+        config = TaskConfig.from_dict(
+            {
+                "task_name": "打包测试",
+                "start_urls": ["https://example.com/"],
+                "allowed_domains": ["example.com"],
+            }
+        )
+        window._save_task(config, config.to_dict())
+        window._load_tasks()
+        window.task_table.selectRow(0)
+
+        package = tmp_path / "pkg.zip"
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName", lambda *a, **k: (str(package), "任务包 (*.zip)")
+        )
+        window._on_export_config()
+        assert package.exists() and package.stat().st_size > 0
+
+        monkeypatch.setattr(
+            QFileDialog, "getOpenFileName", lambda *a, **k: (str(package), "任务包 (*.zip)")
+        )
+        window._on_import_config()
+        names = [row["name"] for row in window.store.list_tasks()]
+        assert any("打包测试" in name for name in names)
+    finally:
+        window.close()
+        window.deleteLater()
+
+
+def test_spider_template_generation(qapp, tmp_path, monkeypatch):
+    """Spider 页「新建模板」生成可识别的 Spider 文件。"""
+    from PySide6.QtWidgets import QFileDialog
+
+    window = MainWindow()
+    window._open_spider_window()
+    page = window._spider_page
+    target = tmp_path / "generated_spider.py"
+    try:
+        monkeypatch.setattr(
+            QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), "Python (*.py)")
+        )
+        page._create_template()
+        assert target.exists()
+        assert "class MySpider(Spider)" in target.read_text(encoding="utf-8")
+        assert page.class_combo.currentText() == "MySpider"
+    finally:
+        window._close_spider_window()
+        window.close()
+        window.deleteLater()

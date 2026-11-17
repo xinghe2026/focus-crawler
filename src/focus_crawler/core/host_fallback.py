@@ -45,15 +45,10 @@ def is_dns_error(result: object) -> bool:
 
 
 def _rule_matches(rule: FallbackRule, host: str, url: str) -> bool:
-    if any(host_matches(host, pattern) for pattern in rule.hosts):
-        return True
-    for pattern in rule.patterns:
-        try:
-            if re.search(pattern, url):
-                return True
-        except re.error:
-            continue
-    return False
+    """复用 hotlink 的规则匹配，避免两份等价实现。"""
+    from .hotlink import _rule_matches as hotlink_matches
+
+    return hotlink_matches(rule, host, url)
 
 
 def _replace_host(url: str, host: str) -> str:

@@ -20,24 +20,6 @@ def app_home() -> Path:
     return Path(base) / APP_NAME
 
 
-def ensure_app_dirs(home: Path | None = None) -> dict[str, Path]:
-    """创建并返回各子目录。"""
-    root = home or app_home()
-    dirs = {
-        "root": root,
-        "tasks": root / "tasks",
-        "logs": root / "logs",
-        "exports": root / "exports",
-        "media": root / "media",
-        "adapters": root / "adapters",
-        "recipes": root / "recipes",
-        "snapshots": root / "snapshots",
-    }
-    for path in dirs.values():
-        path.mkdir(parents=True, exist_ok=True)
-    return dirs
-
-
 def db_path(home: Path | None = None) -> Path:
     return (home or app_home()) / "focuscrawler.db"
 

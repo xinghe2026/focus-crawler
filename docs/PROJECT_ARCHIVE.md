@@ -79,3 +79,53 @@ curl_cffi 的 h3 支持与目标站协商。这两项在文档与 UI 中均已�
 2. 缺口 1/8/4：影响长时间大规模抓取的稳定性与被封概率；
 3. 缺口 2/3：属于「承诺了就要做到，做不到就明说」的诚实性问题；
 4. 缺口 10/11：把 mock 测试升级为真实环境回归。
+
+## 7. 冗余审计（2026-11-16 第四轮）
+
+审计方法：用 AST 扫描全量 `src/focus_crawler`，统计「顶层定义被引用次数」与「同名函数跨文件出现」，
+再人工判定哪些是真冗余（而非有意分层）。
+
+### 7.1 删除的死代码（10 处）
+
+| 文件 | 定义 |
+| --- | --- |
+| `config/loader.py` | `list_config_files`、`resolve_relative` |
+| `core/compliance.py` | `require_copyright_confirm` |
+| `core/failure_classifier.py` | `describe_error` |
+| `core/media_common.py` | `image_candidates_from_config` |
+| `core/media_downloader.py` | `download_images` |
+| `core/recipe_manager.py` | `copy_recipe` |
+| `utils/hash.py` | `sha256_bytes` |
+| `utils/paths.py` | `ensure_app_dirs` |
+| `gui/task_editor.py` | `_line` |
+
+### 7.2 合并的重复实现
+
+| 冗余 | 处理 |
+| --- | --- |
+| `audio_adapter` / `video_adapter` 各自的 `adapter_for`、`_load_adapter`、`_validate_results` | 收敛到 `core/adapter_registry.py`，两处只留兼容薄封装 |
+| `host_fallback._rule_matches` 与 `hotlink._rule_matches` | 统一到 `utils/urls.host_matches` |
+| `dynamic_sniffer._dedupe` 与 `media_common._dedupe` | 保留一份通用去重 |
+| `adaptive.domain_of` / `throttle.domain_of` | 统一到 `utils/urls.host_of` |
+| `adaptive.clean_text` 与 `utils.text.clean_text` | 复用后者 + 截断 |
+| `video_sniffer.parse_m3u8` / `pick_variant` 与 `core/hls.py` | 删除重复解析器，统一用 `hls.parse_playlist` |
+| 主窗口三套 `_on_*_download` 启动逻辑 + 12 个回调 | 合并为 `_start_media_download(kind)` + 4 个统一回调 |
+| `spiders/loader.load_module` 与 `ytdlp_engine.load_module` 同名不同义 | 改名 `load_spider_module` |
+
+### 7.3 顺带补上的功能（原本是死代码/缺失入口）
+
+- `recipe_manager` 原本只有测试在用 → 接到「导入/导出配置」：支持 `.zip` 任务包
+  （配置 + 引用的解析脚本一起打包），`.json` 仍可用；
+- Spider 从标签页改为 **工具栏「Spider」按钮 + 独立窗口**，并新增「新建模板」按钮。
+
+### 7.4 教训
+
+合并 `_on_image_done` 等回调时，我漏掉了线程结束后的媒体表格刷新（`_load_media_pages` 这个方法并不存在），
+是人工核对原有实现时发现的——**重构后必须走一遍真实路径**，只跑单测不足以发现这类"回调里调了不存在的方法"。
+
+### 7.5 数据
+
+- 顶层定义被引用 ≤1 次的：14 → 2（剩余 `parse_m3u8` 已删除、`cbc_encrypt` 为 AES 测试用的对偶实现，保留）
+- 源码净行数：19833 → 19762（净减 71 行；新增了 `adapter_registry.py`、`utils/urls.py` 等公共模块，
+  但消除了 8 类重复实现）
+- 测试：255 项通过

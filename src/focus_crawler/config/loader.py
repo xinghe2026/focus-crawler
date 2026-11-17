@@ -30,20 +30,3 @@ def save_config(config: TaskConfig, path: str | Path) -> Path:
     payload = config.to_dict()
     file_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return file_path
-
-
-def list_config_files(directory: str | Path) -> list[Path]:
-    folder = Path(directory)
-    if not folder.exists():
-        return []
-    return sorted(folder.glob("*.json"))
-
-
-def resolve_relative(base_config_path: str | Path, relative: str) -> Path:
-    """把脚本等相对路径解析到配置文件所在目录。"""
-    if not relative:
-        return Path("")
-    candidate = Path(relative)
-    if candidate.is_absolute():
-        return candidate
-    return (Path(base_config_path).parent / candidate).resolve()

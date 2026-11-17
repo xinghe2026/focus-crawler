@@ -41,6 +41,7 @@ from ..config.loader import load_config
 from ..config.schema import ConfigError, TaskConfig
 from ..core.exporter import export_excel
 from ..core.image_crawler import filename_for_image
+from ..core.recipe_manager import export_recipe, import_recipe
 from ..core.storage import Storage
 from ..utils.paths import media_dir, safe_task_name
 from . import settings, theme
@@ -255,6 +256,9 @@ class MainWindow(QMainWindow):
         self.delete_button = QPushButton("删除任务")
         self.batch_delete_button = QPushButton("批量删除")
         self.refresh_button = QPushButton("刷新")
+        self.spider_button = QPushButton("Spider")
+        self.spider_button.setToolTip("打开 Spider 运行器（进阶：Python 爬虫）")
+        self.spider_button.clicked.connect(self._open_spider_window)
         self.settings_button = QPushButton("设置")
         for button in (
             self.new_button,
@@ -268,6 +272,7 @@ class MainWindow(QMainWindow):
         ):
             task_bar.addWidget(button)
         task_bar.addStretch(1)
+        task_bar.addWidget(self.spider_button)
         task_bar.addWidget(self.settings_button)
         outer.addLayout(task_bar)
 
@@ -619,9 +624,6 @@ class MainWindow(QMainWindow):
             lambda: self._delete_media_file("audio", self.audio_table)
         )
 
-        # Spider 是进阶入口：放在最后，避免抢占日常「任务 → 采集」主流程
-        self.spider_page = SpiderPage()
-        self.tabs.addTab(self.spider_page, "Spider（进阶）")
         return self.tabs
 
     # ---------- 勾选与列宽 ----------
@@ -828,19 +830,64 @@ class MainWindow(QMainWindow):
             if dialog.config.task_name != old_name:
                 logger.info("任务已改名：%s -> %s", old_name, dialog.config.task_name)
 
+    # ---------- 任务包（配置 + 脚本） ----------
+    def _task_script_files(self, raw: dict) -> list[Path]:
+        """收集任务引用到的本地脚本（解析脚本 / 自定义适配器）。"""
+        base = settings.tasks_dir()
+        candidates = [
+            (raw.get("parser") or {}).get("list_script"),
+            (raw.get("parser") or {}).get("detail_script"),
+            ((raw.get("audio") or {}).get("adapter") or {}).get("custom_script"),
+        ]
+        files: list[Path] = []
+        for value in candidates:
+            if not value:
+                continue
+            path = Path(str(value))
+            if not path.is_absolute():
+                path = base / path
+            if path.is_file():
+                files.append(path)
+        return files
+
     def _on_import_config(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "导入任务配置", str(settings.tasks_dir()), "JSON 配置 (*.json)"
+            self,
+            "导入任务",
+            str(settings.tasks_dir()),
+            "任务包 (*.zip);;JSON 配置 (*.json)",
         )
         if not path:
             return
         try:
-            config = load_config(path)
-        except ConfigError as exc:
-            QMessageBox.warning(self, "配置错误", "\n".join(exc.errors))
+            if path.lower().endswith(".zip"):
+                folder = import_recipe(path, settings.tasks_dir() / "_imported")
+                config_file = folder / "config.json"
+                if not config_file.is_file():
+                    config_file = next(folder.rglob("config.json"))
+                raw = json.loads(config_file.read_text(encoding="utf-8"))
+                # 把包内脚本路径改写成解包后的绝对路径
+                for key in ("list_script", "detail_script"):
+                    value = (raw.get("parser") or {}).get(key)
+                    if value:
+                        candidate = folder / "assets" / Path(str(value)).name
+                        if candidate.is_file():
+                            raw["parser"][key] = str(candidate)
+                adapter = (raw.get("audio") or {}).get("adapter") or {}
+                value = adapter.get("custom_script")
+                if value:
+                    candidate = folder / "assets" / Path(str(value)).name
+                    if candidate.is_file():
+                        adapter["custom_script"] = str(candidate)
+                config = TaskConfig.from_dict(raw)
+            else:
+                config = load_config(path)
+        except (ConfigError, ValueError, OSError, json.JSONDecodeError) as exc:
+            message = "\n".join(exc.errors) if isinstance(exc, ConfigError) else str(exc)
+            QMessageBox.warning(self, "导入失败", message)
             return
         self._save_task(config, config.to_dict())
-        self.statusBar().showMessage(f"已导入配置：{Path(path).name}")
+        self.statusBar().showMessage(f"已导入：{Path(path).name}")
 
     def _on_export_config(self) -> None:
         selected = self._selected_task()
@@ -848,16 +895,36 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "请先选择一个任务")
             return
         _, raw = selected
-        filename = f"{safe_task_name(str(raw.get('task_name') or 'task'))}.json"
+        stem = safe_task_name(str(raw.get("task_name") or "task"))
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出任务配置", str(settings.tasks_dir() / filename), "JSON 配置 (*.json)"
+            self,
+            "导出任务",
+            str(settings.tasks_dir() / f"{stem}.zip"),
+            "任务包 (*.zip);;JSON 配置 (*.json)",
         )
         if not path:
             return
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.statusBar().showMessage(f"已导出配置：{target}")
+        if target.suffix.lower() != ".zip":
+            target.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.statusBar().showMessage(f"已导出配置：{target}")
+            return
+        import shutil
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            staging = Path(tmp) / stem
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / "config.json").write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            assets = staging / "assets"
+            for script in self._task_script_files(raw):
+                assets.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(script, assets / script.name)
+            export_recipe(staging, target)
+        self.statusBar().showMessage(f"已导出任务包：{target}")
 
     def _on_copy_task(self) -> None:
         selected = self._selected_task()
@@ -1172,6 +1239,31 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("正在停止…")
         logger.info("用户请求停止任务")
 
+    def _open_spider_window(self) -> None:
+        """Spider 是进阶功能：用独立窗口承载，不占用主界面标签。"""
+        if getattr(self, "_spider_dialog", None) is not None:
+            self._spider_dialog.raise_()
+            self._spider_dialog.activateWindow()
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Spider 运行器（进阶）")
+        dialog.resize(1080, 760)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        layout = QVBoxLayout(dialog)
+        page = SpiderPage(dialog)
+        layout.addWidget(page)
+        dialog.finished.connect(lambda _=0: self._close_spider_window())
+        dialog.show()
+        self._spider_dialog = dialog
+        self._spider_page = page
+
+    def _close_spider_window(self) -> None:
+        page = getattr(self, "_spider_page", None)
+        if page is not None:
+            page.shutdown()
+        self._spider_page = None
+        self._spider_dialog = None
+
     def _polish_tables(self) -> None:
         """统一表格观感：交替行 + 紧凑行高 + 等宽数值对齐。"""
         for table in self.findChildren(QTableWidget):
@@ -1438,63 +1530,6 @@ class MainWindow(QMainWindow):
     def _checked_media_ids(self) -> list[int]:
         return _checked_ids(self.image_table)
 
-    def _on_image_download(self) -> None:
-        if self._media_active:
-            return
-        if self._run_thread is not None and self._run_thread.isRunning():
-            QMessageBox.information(self, "提示", "抓取任务运行中，请稍后再下载媒体")
-            return
-        selected = self._selected_task()
-        if selected is None:
-            QMessageBox.information(self, "提示", "请先选择一个任务")
-            return
-        task_id, raw = selected
-        config = self._task_config(raw)
-        if config is None:
-            return
-        media_ids = self._checked_media_ids()
-        if not media_ids:
-            QMessageBox.information(self, "提示", "请先勾选要下载的图片，或点击“全选”")
-            return
-        if not self.copyright_check.isChecked():
-            QMessageBox.information(
-                self, "版权提示", "请先勾选“已确认媒体版权与合规用途”后再批量下载。"
-            )
-            return
-
-        worker = MediaDownloadWorker(
-            config,
-            settings.db_file(),
-            task_id,
-            media_ids,
-            "image",
-            config.image.concurrency,
-            True,
-            None,
-            settings.media_root(),
-        )
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self._on_image_progress)
-        worker.done.connect(self._on_image_done)
-        worker.failed.connect(self._on_image_failed)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_image_thread_finished)
-        self._media_worker = worker
-        self._media_thread = thread
-        self._media_kind = "image"
-        self._media_task_id = task_id
-        self.image_progress.setRange(0, max(len(media_ids), 1))
-        self.image_progress.setValue(0)
-        self.image_status_label.setText(f"准备下载 {len(media_ids)} 张图片…")
-        self._media_active = True
-        self._set_media_running(True)
-        thread.start()
-        logger.info("开始批量下载图片：任务 %s，共 %d 张", config.task_name, len(media_ids))
-
     def _on_image_progress(self, done: int, total: int) -> None:
         self.image_progress.setRange(0, max(total, 1))
         self.image_progress.setValue(min(done, max(total, 1)))
@@ -1514,17 +1549,6 @@ class MainWindow(QMainWindow):
         logger.error(message)
         self.image_status_label.setText(message)
         QMessageBox.warning(self, "下载失败", message)
-
-    def _on_image_thread_finished(self) -> None:
-        task_id = self._media_task_id
-        self._media_active = False
-        self._media_worker = None
-        self._media_thread = None
-        self._media_task_id = None
-        self._set_media_running(False)
-        self._refresh_image_sources()
-        self._refresh_image_table()
-        self._load_tasks(select_id=task_id)
 
     def _on_image_pause(self) -> None:
         if self._media_worker is None:
@@ -1546,6 +1570,165 @@ class MainWindow(QMainWindow):
         self.image_stop_button.setEnabled(False)
         self.statusBar().showMessage("正在停止媒体下载…")
         logger.info("用户请求停止媒体下载")
+
+    # ---------- 媒体批量下载（图片 / 视频 / 音频共用一套流程） ----------
+    MEDIA_META = {
+        "image": {"label": "图片", "unit": "张", "progress": "image_progress", "status": "image_status_label"},
+        "video": {"label": "视频", "unit": "个", "progress": "video_progress", "status": "video_status_label"},
+        "audio": {"label": "音频", "unit": "个", "progress": "audio_progress", "status": "audio_status_label"},
+    }
+
+    def _media_progress_widget(self, kind: str):
+        return getattr(self, self.MEDIA_META[kind]["progress"])
+
+    def _media_status_widget(self, kind: str):
+        return getattr(self, self.MEDIA_META[kind]["status"])
+
+    def _checked_ids_for(self, kind: str) -> list[int]:
+        table = {"image": self.image_table, "video": self.video_table, "audio": self.audio_table}[kind]
+        return _checked_ids(table)
+
+    def _media_concurrency(self, config: TaskConfig, kind: str) -> int:
+        if kind == "image":
+            return config.image.concurrency
+        if kind == "video":
+            return VIDEO_CONCURRENCY
+        return config.audio.concurrency
+
+    def _on_image_download(self) -> None:
+        self._start_media_download("image")
+
+    def _on_video_download(self) -> None:
+        self._start_media_download("video")
+
+    def _on_audio_download(self) -> None:
+        self._start_media_download("audio")
+
+    def _start_media_download(self, kind: str) -> None:
+        """图片 / 视频 / 音频批量下载的统一入口（原先三份重复实现）。"""
+        meta = self.MEDIA_META[kind]
+        if self._media_active:
+            return
+        if self._run_thread is not None and self._run_thread.isRunning():
+            QMessageBox.information(self, "提示", "抓取任务运行中，请稍后再下载媒体")
+            return
+        selected = self._selected_task()
+        if selected is None:
+            QMessageBox.information(self, "提示", "请先选择一个任务")
+            return
+        task_id, raw = selected
+        config = self._task_config(raw)
+        if config is None:
+            return
+        media_ids = self._checked_ids_for(kind)
+        if not media_ids:
+            QMessageBox.information(self, "提示", f"请先勾选要下载的{meta['label']}，或点击“全选”")
+            return
+        if not self.copyright_check.isChecked():
+            QMessageBox.information(
+                self, "版权提示", "请先勾选“已确认媒体版权与合规用途”后再批量下载。"
+            )
+            return
+        if kind == "audio" and self._has_commercial_audio(task_id, media_ids):
+            choice = QMessageBox.warning(
+                self,
+                "高风险版权提示",
+                "选中项包含商业音乐平台音频，版权风险较高。\n"
+                "仅限个人学习研究使用，请勿传播或商用；工具不提供解密或签名逆向。\n"
+                "确认继续下载？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if choice != QMessageBox.StandardButton.Yes:
+                return
+
+        worker = MediaDownloadWorker(
+            config,
+            settings.db_file(),
+            task_id,
+            media_ids,
+            kind,
+            self._media_concurrency(config, kind),
+            True,
+            None if kind == "image" else settings.ffmpeg_path(),
+            settings.media_root(),
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_media_progress)
+        worker.done.connect(self._on_media_done)
+        worker.failed.connect(self._on_media_failed)
+        worker.finished.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_media_thread_finished)
+        self._media_worker = worker
+        self._media_thread = thread
+        self._media_task_id = task_id
+        self._media_kind = kind
+        progress = self._media_progress_widget(kind)
+        progress.setRange(0, max(len(media_ids), 1))
+        progress.setValue(0)
+        self._media_status_widget(kind).setText(f"准备下载 {len(media_ids)} {meta['unit']}{meta['label']}…")
+        self._media_active = True
+        self._set_media_running(True)
+        thread.start()
+        logger.info("开始批量下载%s：任务 %s，共 %d %s", meta["label"], config.task_name, len(media_ids), meta["unit"])
+
+    def _on_media_progress(self, done: int, total: int) -> None:
+        if self._media_kind not in self.MEDIA_META:
+            return
+        progress = self._media_progress_widget(self._media_kind)
+        progress.setRange(0, max(total, 1))
+        progress.setValue(min(done, max(total, 1)))
+        self._media_status_widget(self._media_kind).setText(f"正在下载：{done} / {total}")
+
+    def _on_media_done(self, summary: dict) -> None:
+        if self._media_kind not in self.MEDIA_META:
+            return
+        state = "已停止" if summary.get("stopped") else "下载完成"
+        message = (
+            f"{state}：成功 {summary.get('downloaded', 0)}，"
+            f"跳过 {summary.get('skipped', 0)}，失败 {summary.get('failed', 0)}"
+        )
+        logger.info(message)
+        self._media_status_widget(self._media_kind).setText(message)
+        self.statusBar().showMessage(message)
+        self._media_active = False
+        self._media_worker = None
+        self._media_task_id = None
+        self._set_media_running(False)
+
+    def _on_media_failed(self, message: str) -> None:
+        logger.warning("媒体下载失败：%s", message)
+        if self._media_kind in self.MEDIA_META:
+            self._media_status_widget(self._media_kind).setText(f"失败：{message}")
+        QMessageBox.warning(self, "下载失败", message)
+        self._media_active = False
+        self._media_worker = None
+        self._media_task_id = None
+        self._set_media_running(False)
+
+    def _on_media_thread_finished(self) -> None:
+        task_id = self._media_task_id
+        kind = self._media_kind
+        self._media_active = False
+        self._media_worker = None
+        self._media_thread = None
+        self._media_task_id = None
+        self._set_media_running(False)
+        refreshers = {
+            "image": (self._refresh_image_sources, self._refresh_image_table),
+            "video": (self._refresh_video_sources, self._refresh_video_table),
+            "audio": (self._refresh_audio_sources, self._refresh_audio_table),
+        }
+        for refresh in refreshers.get(kind, ()):
+            try:
+                refresh()
+            except Exception as exc:  # noqa: BLE001 - 刷新失败不影响收尾
+                logger.debug("刷新媒体列表失败：%s", exc)
+        self._load_tasks(select_id=task_id)
 
     def _set_media_running(self, running: bool) -> None:
         for kind in ("image", "video", "audio"):
@@ -1627,63 +1810,6 @@ class MainWindow(QMainWindow):
     def _checked_video_ids(self) -> list[int]:
         return _checked_ids(self.video_table)
 
-    def _on_video_download(self) -> None:
-        if self._media_active:
-            return
-        if self._run_thread is not None and self._run_thread.isRunning():
-            QMessageBox.information(self, "提示", "抓取任务运行中，请稍后再下载媒体")
-            return
-        selected = self._selected_task()
-        if selected is None:
-            QMessageBox.information(self, "提示", "请先选择一个任务")
-            return
-        task_id, raw = selected
-        config = self._task_config(raw)
-        if config is None:
-            return
-        media_ids = self._checked_video_ids()
-        if not media_ids:
-            QMessageBox.information(self, "提示", "请先勾选要下载的视频，或点击“全选”")
-            return
-        if not self.copyright_check.isChecked():
-            QMessageBox.information(
-                self, "版权提示", "请先勾选“已确认媒体版权与合规用途”后再批量下载。"
-            )
-            return
-
-        worker = MediaDownloadWorker(
-            config,
-            settings.db_file(),
-            task_id,
-            media_ids,
-            "video",
-            VIDEO_CONCURRENCY,
-            True,
-            settings.ffmpeg_path(),
-            settings.media_root(),
-        )
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self._on_video_progress)
-        worker.done.connect(self._on_video_done)
-        worker.failed.connect(self._on_video_failed)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_video_thread_finished)
-        self._media_worker = worker
-        self._media_thread = thread
-        self._media_task_id = task_id
-        self._media_kind = "video"
-        self.video_progress.setRange(0, max(len(media_ids), 1))
-        self.video_progress.setValue(0)
-        self.video_status_label.setText(f"准备下载 {len(media_ids)} 个视频…")
-        self._media_active = True
-        self._set_media_running(True)
-        thread.start()
-        logger.info("开始批量下载视频：任务 %s，共 %d 个", config.task_name, len(media_ids))
-
     def _on_video_progress(self, done: int, total: int) -> None:
         self.video_progress.setRange(0, max(total, 1))
         self.video_progress.setValue(min(done, max(total, 1)))
@@ -1703,17 +1829,6 @@ class MainWindow(QMainWindow):
         logger.error(message)
         self.video_status_label.setText(message)
         QMessageBox.warning(self, "下载失败", message)
-
-    def _on_video_thread_finished(self) -> None:
-        task_id = self._media_task_id
-        self._media_active = False
-        self._media_worker = None
-        self._media_thread = None
-        self._media_task_id = None
-        self._set_media_running(False)
-        self._refresh_video_sources()
-        self._refresh_video_table()
-        self._load_tasks(select_id=task_id)
 
     def _on_video_pause(self) -> None:
         if self._media_worker is None:
@@ -1814,75 +1929,6 @@ class MainWindow(QMainWindow):
                 return True
         return False
 
-    def _on_audio_download(self) -> None:
-        if self._media_active:
-            return
-        if self._run_thread is not None and self._run_thread.isRunning():
-            QMessageBox.information(self, "提示", "抓取任务运行中，请稍后再下载媒体")
-            return
-        selected = self._selected_task()
-        if selected is None:
-            QMessageBox.information(self, "提示", "请先选择一个任务")
-            return
-        task_id, raw = selected
-        config = self._task_config(raw)
-        if config is None:
-            return
-        media_ids = self._checked_audio_ids()
-        if not media_ids:
-            QMessageBox.information(self, "提示", "请先勾选要下载的音频，或点击“全选”")
-            return
-        if not self.copyright_check.isChecked():
-            QMessageBox.information(
-                self, "版权提示", "请先勾选“已确认媒体版权与合规用途”后再批量下载。"
-            )
-            return
-        if self._has_commercial_audio(task_id, media_ids):
-            choice = QMessageBox.warning(
-                self,
-                "高风险版权提示",
-                "选中项包含商业音乐平台音频，版权风险较高。\n"
-                "仅限个人学习研究使用，请勿传播或商用；工具不提供解密或签名逆向。\n"
-                "确认继续下载？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if choice != QMessageBox.StandardButton.Yes:
-                return
-
-        worker = MediaDownloadWorker(
-            config,
-            settings.db_file(),
-            task_id,
-            media_ids,
-            "audio",
-            config.audio.concurrency,
-            True,
-            settings.ffmpeg_path(),
-            settings.media_root(),
-        )
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self._on_audio_progress)
-        worker.done.connect(self._on_audio_done)
-        worker.failed.connect(self._on_audio_failed)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(self._on_audio_thread_finished)
-        self._media_worker = worker
-        self._media_thread = thread
-        self._media_task_id = task_id
-        self._media_kind = "audio"
-        self.audio_progress.setRange(0, max(len(media_ids), 1))
-        self.audio_progress.setValue(0)
-        self.audio_status_label.setText(f"准备下载 {len(media_ids)} 个音频…")
-        self._media_active = True
-        self._set_media_running(True)
-        thread.start()
-        logger.info("开始批量下载音频：任务 %s，共 %d 个", config.task_name, len(media_ids))
-
     def _on_audio_progress(self, done: int, total: int) -> None:
         self.audio_progress.setRange(0, max(total, 1))
         self.audio_progress.setValue(min(done, max(total, 1)))
@@ -1902,17 +1948,6 @@ class MainWindow(QMainWindow):
         logger.error(message)
         self.audio_status_label.setText(message)
         QMessageBox.warning(self, "下载失败", message)
-
-    def _on_audio_thread_finished(self) -> None:
-        task_id = self._media_task_id
-        self._media_active = False
-        self._media_worker = None
-        self._media_thread = None
-        self._media_task_id = None
-        self._set_media_running(False)
-        self._refresh_audio_sources()
-        self._refresh_audio_table()
-        self._load_tasks(select_id=task_id)
 
     def _on_audio_pause(self) -> None:
         if self._media_worker is None:
@@ -2038,8 +2073,8 @@ class MainWindow(QMainWindow):
         self.log_view.appendPlainText(message)
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt 接口命名
-        if hasattr(self, "spider_page"):
-            self.spider_page.shutdown()
+        if getattr(self, "_spider_page", None) is not None:
+            self._spider_page.shutdown()
         logging.getLogger("focus_crawler").removeHandler(self._log_handler)
         if self._run_worker is not None:
             self._run_worker.stop()

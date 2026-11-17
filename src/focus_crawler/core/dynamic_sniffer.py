@@ -67,14 +67,9 @@ def classify_media_url(
 
 
 def _dedupe(urls: list[str]) -> list[str]:
+    """去重（保持顺序）；复用 utils 层的通用实现。"""
     seen: set[str] = set()
-    unique: list[str] = []
-    for url in urls:
-        if url in seen:
-            continue
-        seen.add(url)
-        unique.append(url)
-    return unique
+    return [url for url in urls if not (url in seen or seen.add(url))]
 
 
 def _page_headers(task: TaskConfig) -> dict[str, str]:

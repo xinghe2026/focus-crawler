@@ -10,10 +10,6 @@ def sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
 
 
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def normalize_url(url: str) -> str:
     """去掉 fragment，规整 host 大小写，保留 query。"""
     url = (url or "").strip()

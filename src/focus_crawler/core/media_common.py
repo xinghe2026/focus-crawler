@@ -113,7 +113,7 @@ def _meta_content(html: str, key: str) -> list[str]:
     return [value for value in values if value]
 
 
-def _dedupe(candidates: list[MediaCandidate]) -> list[MediaCandidate]:
+def dedupe(candidates: list[MediaCandidate]) -> list[MediaCandidate]:
     seen: set[str] = set()
     unique: list[MediaCandidate] = []
     for candidate in candidates:
@@ -145,7 +145,7 @@ def static_video_candidates(html: str, page_url: str, cfg: VideoConfig) -> list[
         if cfg.sniff_types and fmt not in cfg.sniff_types:
             continue
         candidates.append(MediaCandidate(url=absolute, kind="video", format=fmt, source_kind=kind))
-    return _dedupe(candidates)[: cfg.max_count]
+    return dedupe(candidates)[: cfg.max_count]
 
 
 def static_audio_candidates(html: str, page_url: str, cfg: AudioConfig) -> list[MediaCandidate]:
@@ -171,7 +171,7 @@ def static_audio_candidates(html: str, page_url: str, cfg: AudioConfig) -> list[
         if not _keyword_match(absolute, cfg.include_keywords, cfg.exclude_keywords):
             continue
         candidates.append(MediaCandidate(url=absolute, kind="audio", format=fmt, source_kind=kind))
-    return _dedupe(candidates)[: cfg.max_count]
+    return dedupe(candidates)[: cfg.max_count]
 
 
 def sanitize_filename(name: str, default: str = "file") -> str:
@@ -345,10 +345,6 @@ def _fetch_once(fetcher, url: str, target: Path, headers: dict[str, str] | None,
         raise MediaDownloadError(result.error or "下载失败", result.failure_type or "media_download_error")
     target.write_bytes(result.content)
     return target, len(result.content)
-
-
-def image_candidates_from_config(cfg: ImageConfig) -> tuple[list[str], list[str]]:
-    return cfg.include_keywords, cfg.exclude_keywords
 
 
 def dynamic_media_candidates(

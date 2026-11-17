@@ -44,12 +44,3 @@ def classify_exception(exc: BaseException) -> str:
     if isinstance(exc, httpx.HTTPError):
         return "http_error"
     return "unknown"
-
-
-def describe_error(status_code: int | None, error: str | None) -> tuple[str | None, str | None]:
-    """返回 (failure_type, error_message)。"""
-    if error:
-        return "unknown", error
-    if status_code is not None:
-        return classify_http_status(status_code), None
-    return None, None

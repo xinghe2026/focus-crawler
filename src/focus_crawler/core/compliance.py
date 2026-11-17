@@ -40,9 +40,3 @@ class RobotsCache:
         if parser is None:
             return True
         return parser.can_fetch(self.user_agent, url)
-
-
-def require_copyright_confirm(enabled: bool, confirmed: bool = False) -> None:
-    """媒体下载前的版权确认闸门。"""
-    if enabled and not confirmed:
-        raise PermissionError("下载媒体前需要用户确认版权提示")
